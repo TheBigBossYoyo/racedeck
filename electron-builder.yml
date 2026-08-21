@@ -9,7 +9,21 @@ files:
   - '!electron.vite.config.{js,ts,mjs,cjs}'
   - '!{.eslintignore,.eslintrc.cjs,.prettierignore,.prettierrc,tsconfig.json,tsconfig.node.json,tsconfig.web.json}'
   - '!{.env,.env.*,.npmrc}'
-  - '!tests/*'
+  - '!tests'
+  # `directories.output` is version-scoped (release/${version}), so electron-builder
+  # only auto-excludes the version being built — every PREVIOUS release stayed
+  # eligible and got packaged INSIDE the new app. That silently grew the 0.3.0
+  # installer to 1.2 GB by embedding the 376 MB 0.2.0 one. Exclude the whole tree.
+  - '!release'
+  # Development artifacts with no place in a shipped build.
+  - '!screens'
+  - '!test-results'
+  - '!playwright-report'
+  - '!.playwright-mcp'
+  - '!coverage'
+  - '!*.tsbuildinfo'
+  - '!{playwright.config.ts,vitest.config.ts,postcss.config.mjs,tailwind.config.js}'
+  - '!{HANDOFF.md,README.md}'
 asarUnpack:
   - resources/**
 win:
