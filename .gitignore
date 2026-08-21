@@ -1,0 +1,19 @@
+node_modules
+dist
+out
+.DS_Store
+*.log
+release
+.vite
+coverage
+playwright-report
+test-results
+.env
+.env.*
+!.env.example
+
+# Claude Code machine-local settings
+.claude/settings.local.json
+
+# Playwright MCP debug snapshots (transient)
+.playwright-mcp

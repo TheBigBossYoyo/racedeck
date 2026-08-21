@@ -1,0 +1,29 @@
+appId: app.racedeck.desktop
+productName: RaceDeck
+directories:
+  buildResources: build
+  output: release/${version}
+files:
+  - '!**/.vscode/*'
+  - '!src/*'
+  - '!electron.vite.config.{js,ts,mjs,cjs}'
+  - '!{.eslintignore,.eslintrc.cjs,.prettierignore,.prettierrc,tsconfig.json,tsconfig.node.json,tsconfig.web.json}'
+  - '!{.env,.env.*,.npmrc}'
+  - '!tests/*'
+asarUnpack:
+  - resources/**
+win:
+  target:
+    - nsis
+  artifactName: ${name}-${version}-setup.${ext}
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  perMachine: false
+# NOTE (DRM / production): to ship legitimate Widevine playback, install the
+# castLabs Electron fork and run `npm run build:win:vmp` after EVS setup. That
+# command packages first, EVS-signs/verifies, then builds NSIS from that exact
+# prepackaged directory so VMP cannot be skipped when Authenticode is absent.
+# See README "Enabling real DRM playback (castLabs)" section.
+electronDownload:
+  mirror: https://github.com/castlabs/electron-releases/releases/download/

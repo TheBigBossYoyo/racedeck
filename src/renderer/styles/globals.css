@@ -1,0 +1,250 @@
+/* Third-party base styles MUST be imported before Tailwind's layers
+   (CSS spec: @import has to precede other statements, or browsers ignore it). */
+@import 'react-grid-layout/css/styles.css';
+@import 'react-resizable/css/styles.css';
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  /* Base palette — deep "command center" navy-black. R G B (for /alpha). */
+  --bg-base: 8 9 14;
+  --bg-raised: 14 16 24;
+  --bg-overlay: 19 22 33;
+  --panel: 17 20 30;
+  --border: 42 47 64;
+  --hairline: 64 70 92;
+  --fg: 233 236 245;
+  --fg-muted: 150 156 172;
+  --fg-subtle: 104 110 128;
+  --accent: 34 211 238;
+  --accent-soft: 34 211 238;
+  --speed: 34 211 238;
+  --danger: 244 63 94;
+  --warn: 245 158 11;
+  --good: 52 211 153;
+  --purple: 168 130 255;
+  --density-gap: 8px;
+  --font-scale: 1;
+  /* Race-phase strip colours (timeline) — deliberately distinct hues. */
+  --phase-pre: #64748b; /* slate — prep/grid */
+  --phase-green: #22c55e; /* green — racing */
+  --phase-q1: #22d3ee; /* cyan — qualifying 1 */
+  --phase-q2: #3b82f6; /* blue — qualifying 2; never confused with yellow flag */
+  --phase-q3: #c084fc; /* purple — qualifying 3 */
+  --phase-break: #475569; /* slate — between qualifying phases */
+  --phase-yellow: #facc15; /* yellow flag */
+  --phase-vsc: #f59e0b; /* amber — virtual safety car */
+  --phase-sc: #f97316; /* orange — safety car */
+  --phase-red: #ef4444; /* red flag */
+  --phase-post: #334155; /* dim slate — cool-down */
+  color-scheme: dark;
+}
+
+/* ── Light mode ─────────────────────────────────────────────────────────────
+   A clean, cool "pro app" light scheme. Semantic tokens flip; every widget that
+   uses the tokens (fg / bg / hairline / accent) adapts automatically. */
+:root[data-theme='light'] {
+  --bg-base: 232 235 242; /* cool canvas — sits under white panels for depth */
+  --bg-raised: 255 255 255;
+  --bg-overlay: 255 255 255;
+  --panel: 255 255 255;
+  --border: 209 214 224;
+  --hairline: 190 197 210;
+  --fg: 20 25 35;
+  --fg-muted: 91 99 115;
+  --fg-subtle: 134 142 158;
+  --danger: 220 38 38;
+  --warn: 176 106 0;
+  --good: 4 140 96;
+  --purple: 124 92 246;
+  --phase-pre: #94a3b8; /* slate — prep/grid */
+  --phase-green: #16a34a; /* green — racing */
+  --phase-q1: #0891b2; /* cyan — qualifying 1 */
+  --phase-q2: #2563eb; /* blue — qualifying 2; never confused with yellow flag */
+  --phase-q3: #9333ea; /* purple — qualifying 3 */
+  --phase-break: #94a3b8; /* slate — between qualifying phases */
+  --phase-yellow: #eab308; /* yellow flag */
+  --phase-vsc: #d97706; /* amber — virtual safety car */
+  --phase-sc: #ea580c; /* orange — safety car */
+  --phase-red: #dc2626; /* red flag */
+  --phase-post: #64748b; /* slate — cool-down */
+  color-scheme: light;
+}
+
+* {
+  border-color: rgb(var(--border) / 0.6);
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background:
+    radial-gradient(1200px 800px at 15% -10%, rgb(var(--accent) / 0.06), transparent 60%),
+    radial-gradient(1000px 700px at 110% 10%, rgb(120 90 255 / 0.05), transparent 55%),
+    rgb(var(--bg-base));
+  color: rgb(var(--fg));
+  font-family: 'Inter var', Inter, 'Segoe UI', system-ui, -apple-system, sans-serif;
+  font-feature-settings: 'cv02', 'cv03', 'cv04', 'ss01';
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  overflow: hidden;
+  user-select: none;
+}
+
+/* Softer, brighter ambient wash for light mode. */
+:root[data-theme='light'] body {
+  background:
+    radial-gradient(1200px 800px at 15% -12%, rgb(var(--accent) / 0.07), transparent 58%),
+    radial-gradient(1000px 700px at 112% 8%, rgb(120 90 255 / 0.05), transparent 55%),
+    rgb(var(--bg-base));
+}
+
+/* Window drag regions for the frameless shell */
+.drag {
+  -webkit-app-region: drag;
+}
+.no-drag {
+  -webkit-app-region: no-drag;
+}
+
+/* ── Glassmorphism ─────────────────────────────────────────────────────────── */
+.glass {
+  background: linear-gradient(
+    180deg,
+    rgb(var(--bg-overlay) / 0.72),
+    rgb(var(--panel) / 0.6)
+  );
+  backdrop-filter: blur(18px) saturate(1.2);
+  -webkit-backdrop-filter: blur(18px) saturate(1.2);
+  border: 1px solid rgb(var(--hairline) / 0.35);
+  box-shadow:
+    inset 0 1px 0 0 rgb(255 255 255 / 0.05),
+    0 12px 40px -12px rgb(0 0 0 / 0.65);
+}
+
+.glass-strong {
+  background: linear-gradient(180deg, rgb(var(--bg-overlay) / 0.9), rgb(var(--panel) / 0.82));
+  backdrop-filter: blur(28px) saturate(1.25);
+  -webkit-backdrop-filter: blur(28px) saturate(1.25);
+  border: 1px solid rgb(var(--hairline) / 0.4);
+}
+
+/* Light mode: opaque, crisply-bordered panels with a soft layered shadow —
+   translucent whites over a light canvas read as muddy/washed, so we make the
+   glass solid and let the border + shadow carry the depth. */
+:root[data-theme='light'] .glass {
+  background: linear-gradient(180deg, #ffffff, #fbfcfe);
+  border-color: rgb(var(--hairline) / 0.6);
+  box-shadow:
+    0 1px 2px rgb(15 23 42 / 0.05),
+    0 10px 26px -16px rgb(15 23 42 / 0.22);
+}
+:root[data-theme='light'] .glass-strong {
+  background: linear-gradient(180deg, #ffffff, #f6f8fc);
+  border-color: rgb(var(--hairline) / 0.68);
+  box-shadow:
+    0 1px 2px rgb(15 23 42 / 0.06),
+    0 14px 34px -18px rgb(15 23 42 / 0.26);
+}
+/* Neon glows and heavy text-shadows look garish on white. */
+:root[data-theme='light'] .shadow-glow {
+  box-shadow: 0 2px 10px -3px rgb(var(--accent) / 0.4);
+}
+:root[data-theme='light'] .text-glow {
+  text-shadow: none;
+}
+
+.hairline {
+  border: 1px solid rgb(var(--hairline) / 0.3);
+}
+
+.tnum {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum';
+}
+
+.mono {
+  font-family: 'JetBrains Mono', 'SF Mono', ui-monospace, 'Cascadia Code', monospace;
+}
+
+/* Accent text glow for key numbers */
+.text-glow {
+  text-shadow: 0 0 18px rgb(var(--accent) / 0.4);
+}
+
+/* ── Scrollbars ────────────────────────────────────────────────────────────── */
+::-webkit-scrollbar {
+  width: 9px;
+  height: 9px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgb(var(--hairline) / 0.5);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgb(var(--fg-subtle) / 0.7);
+  background-clip: content-box;
+}
+
+/* ── react-grid-layout overrides ───────────────────────────────────────────── */
+.react-grid-item.react-grid-placeholder {
+  background: rgb(var(--accent) / 0.14);
+  border: 1.5px dashed rgb(var(--accent) / 0.5);
+  border-radius: 14px;
+  opacity: 1;
+  box-shadow: 0 0 40px -8px rgb(var(--accent) / 0.4);
+}
+.react-grid-item {
+  transition:
+    transform 180ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    width 180ms,
+    height 180ms;
+}
+.react-grid-item.resizing,
+.react-grid-item.react-draggable-dragging {
+  transition: none;
+  z-index: 30;
+}
+.react-grid-item > .react-resizable-handle {
+  opacity: 0;
+  transition: opacity 150ms;
+}
+.rd-edit .react-grid-item > .react-resizable-handle {
+  opacity: 0.4;
+}
+.react-grid-item > .react-resizable-handle::after {
+  border-color: rgb(var(--fg-muted) / 0.8);
+  width: 8px;
+  height: 8px;
+}
+
+[data-reduced-motion='true'] * {
+  animation-duration: 0.001ms !important;
+  transition-duration: 0.001ms !important;
+}
+
+/* Utility: subtle animated top hairline accent for active panels */
+.accent-top::before {
+  content: '';
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgb(var(--accent) / 0.7),
+    transparent
+  );
+}

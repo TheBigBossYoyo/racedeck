@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en" class="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!--
+      Content-Security-Policy for the RaceDeck app shell (the React UI).
+      This locks down the app UI itself. The TOD browsing surface runs in a
+      SEPARATE WebContentsView / BrowserWindow with its own session and is NOT
+      governed by this policy — RaceDeck never injects into or inspects it.
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' https://api.openf1.org https://*.openf1.org; frame-src 'none'"
+    />
+    <title>RaceDeck</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/renderer/main.tsx"></script>
+  </body>
+</html>
