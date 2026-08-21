@@ -53,6 +53,7 @@ import {
   buildLapPositions,
   buildSessionBests,
   collectPitLaneTimes,
+  pitLapIndex,
   collectTeamRadio,
   buildCurrentTyres,
   applyCurrentTyres,
@@ -130,6 +131,8 @@ export class F1LiveProvider implements DataProvider {
   private timingStatsPoints: F1StreamPoint[] = []
   private topThreePoints: F1StreamPoint[] = []
   private pitLanePoints: F1StreamPoint[] = []
+  private pitLapIndexCache: { in: Set<string>; out: Set<string> } | undefined
+  private pitLapIndexPoints = -1
   private teamRadioPoints: F1StreamPoint[] = []
   private currentTyrePoints: F1StreamPoint[] = []
   private tlaRcmPoints: F1StreamPoint[] = []
@@ -714,7 +717,23 @@ export class F1LiveProvider implements DataProvider {
   }
 
   getDriverLaps(driverNumber: number): LapSample[] {
-    return (this.lapsByDriver.get(driverNumber) ?? []).map(lapRecordToSample)
+    const pitLaps = this.pitLapIndex()
+    return (this.lapsByDriver.get(driverNumber) ?? []).map((r) => lapRecordToSample(r, pitLaps))
+  }
+
+  /**
+   * F1's own statement of which laps were pit in-/out-laps, when the feed
+   * carries it. Recomputed only when new pit entries arrive.
+   */
+  private pitLapIndex(): { in: Set<string>; out: Set<string> } | undefined {
+    const points = this.pitLanePoints
+    if (points.length === 0) return undefined
+    if (this.pitLapIndexCache && this.pitLapIndexPoints === points.length) {
+      return this.pitLapIndexCache
+    }
+    this.pitLapIndexPoints = points.length
+    this.pitLapIndexCache = pitLapIndex(collectPitLaneTimes(points, Infinity))
+    return this.pitLapIndexCache
   }
 
   getTimeline(): SessionTimeline {
@@ -863,9 +882,10 @@ export class F1LiveProvider implements DataProvider {
     if (cacheKey === this.lapCacheKey) return this.lapCache
 
     const out: LapSample[] = []
+    const pitLaps = this.pitLapIndex()
     for (const recs of this.lapsByDriver.values()) {
       for (const r of recs) {
-        if (r.tComplete <= clock) out.push(lapRecordToSample(r))
+        if (r.tComplete <= clock) out.push(lapRecordToSample(r, pitLaps))
       }
     }
     this.lapCacheKey = cacheKey
@@ -936,6 +956,16 @@ export class F1LiveProvider implements DataProvider {
         const lapCount = num(line.NumberOfLaps)
         if (lapCount == null) continue
         const dn = +key
+        // Pit state seen since this driver's last completed lap. A lap during
+        // which the car was in the pit lane is its in-lap, and the lap after one
+        // is the out-lap. Used only as a fallback: PitLaneTimeCollection states
+        // the pit lap exactly, while InPit also goes true on the grid and under
+        // a red flag.
+        const pitState = build.pitState.get(dn) ?? { inPit: false, outNext: false }
+        if (line.InPit === true) pitState.inPit = true
+        if (line.PitOut === true) pitState.outNext = true
+        build.pitState.set(dn, pitState)
+
         const prev = build.prevLaps.get(dn) ?? 0
         if (lapCount > prev) {
           build.prevLaps.set(dn, lapCount)
@@ -950,9 +980,13 @@ export class F1LiveProvider implements DataProvider {
             sector2: parseLapTime(rec(sectors[1]).Value),
             sector3: parseLapTime(rec(sectors[2]).Value),
             compound: currentStint(appLines[key]).compound,
-            tComplete: point.t
+            tComplete: point.t,
+            isPitInLap: pitState.inPit,
+            isPitOutLap: pitState.outNext
           })
           laps.set(dn, arr)
+          // The lap after an in-lap is the out-lap; reset the in-pit watch.
+          build.pitState.set(dn, { inPit: false, outNext: pitState.inPit })
         }
       }
       build.processedTiming += 1
@@ -1063,6 +1097,7 @@ interface LapBuild {
   appIndex: number
   processedTiming: number
   prevLaps: Map<number, number>
+  pitState: Map<number, { inPit: boolean; outNext: boolean }>
   qualifyingParts: { t: number; part: 1 | 2 | 3 }[]
   previousPart: 1 | 2 | 3 | null
   foundInitialTiming: boolean
@@ -1076,6 +1111,7 @@ function newLapBuild(): LapBuild {
     appIndex: 0,
     processedTiming: 0,
     prevLaps: new Map(),
+    pitState: new Map(),
     qualifyingParts: [],
     previousPart: null,
     foundInitialTiming: false,

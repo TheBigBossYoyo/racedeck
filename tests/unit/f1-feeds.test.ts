@@ -7,7 +7,9 @@ import {
   collectPitLaneTimes,
   collectTeamRadio,
   latestTrackMessage,
-  mergeTopThreeDrivers
+  mergeTopThreeDrivers,
+  pitLapIndex,
+  lapRecordToSample
 } from '@renderer/core/providers/f1normalize'
 import type { F1StreamPoint } from '@shared/f1live'
 import type { Driver, TimingEntry } from '@shared/models'
@@ -199,5 +201,38 @@ describe('mergeTopThreeDrivers', () => {
     )
     expect(out).toHaveLength(1)
     expect(out[0].code).toBe('VER')
+  })
+})
+
+describe('pit in/out lap flags', () => {
+  const rec = (driverNumber: number, lapNumber: number) => ({
+    driverNumber, lapNumber, lapTime: 90, sector1: null, sector2: null, sector3: null,
+    compound: null, tComplete: lapNumber * 90, isPitInLap: false, isPitOutLap: false
+  })
+
+  it('marks the pit lap and the following lap from F1s own pit times', () => {
+    const index = pitLapIndex([{ driverNumber: 44, duration: 24.1, lap: 12 }])
+    expect(lapRecordToSample(rec(44, 11), index)).toMatchObject({ isPitInLap: false, isPitOutLap: false })
+    expect(lapRecordToSample(rec(44, 12), index)).toMatchObject({ isPitInLap: true, isPitOutLap: false })
+    expect(lapRecordToSample(rec(44, 13), index)).toMatchObject({ isPitInLap: false, isPitOutLap: true })
+  })
+
+  it('keeps drivers separate', () => {
+    const index = pitLapIndex([{ driverNumber: 44, duration: 24.1, lap: 12 }])
+    expect(lapRecordToSample(rec(1, 12), index).isPitInLap).toBe(false)
+  })
+
+  it('falls back to the record flags when no pit-time feed exists', () => {
+    // Older sessions may not carry PitLaneTimeCollection; the InPit-derived flags
+    // on the record are then the only signal, and must still come through.
+    const r = { ...rec(1, 12), isPitInLap: true }
+    expect(lapRecordToSample(r).isPitInLap).toBe(true)
+    expect(lapRecordToSample(r, pitLapIndex([])).isPitInLap).toBe(false)
+  })
+
+  it('ignores pit entries with no lap number', () => {
+    const index = pitLapIndex([{ driverNumber: 44, duration: 24.1, lap: null }])
+    expect(index.in.size).toBe(0)
+    expect(index.out.size).toBe(0)
   })
 })

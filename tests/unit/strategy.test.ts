@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   StrategyEngine,
   analysePitLane,
+  estimatePitLoss,
   servedTimePenalties
 } from '@renderer/core/engines/StrategyEngine'
 import type { RaceSnapshot } from '@renderer/core/providers/types'
@@ -391,5 +392,71 @@ describe('servedTimePenalties', () => {
       { message: 'FIA STEWARDS: 10 SECOND TIME PENALTY FOR CAR 10 (GAS) - CAUSING A COLLISION' }
     ] as unknown as Parameters<typeof servedTimePenalties>[0]
     expect(servedTimePenalties(msgs).get(10)).toBe(10)
+  })
+})
+
+describe('estimatePitLoss', () => {
+  /** A driver's laps: steady `base` pace, pitting at `pitLap` with the given excesses. */
+  function driverLaps(
+    driverNumber: number,
+    base: number,
+    pitLap: number,
+    inExcess: number,
+    outExcess: number,
+    total = 20
+  ) {
+    const laps = []
+    for (let n = 1; n <= total; n++) {
+      const isIn = n === pitLap
+      const isOut = n === pitLap + 1
+      laps.push({
+        driverNumber,
+        lapNumber: n,
+        lapTime: base + (isIn ? inExcess : isOut ? outExcess : 0),
+        isPitInLap: isIn,
+        isPitOutLap: isOut,
+        sector1: null, sector2: null, sector3: null,
+        speedI1: null, speedI2: null, speedST: null,
+        compound: null, dateStart: null
+      })
+    }
+    return laps
+  }
+
+  it('measures loss as the in-lap plus out-lap excess over local pace', () => {
+    const laps = [10, 20, 30, 40, 50].flatMap((n, i) => driverLaps(n, 90, 8 + i, 14, 6))
+    const out = estimatePitLoss(laps)
+    expect(out?.source).toBe('measured')
+    expect(out?.seconds).toBeCloseTo(20, 1)
+    expect(out?.sampleSize).toBe(5)
+  })
+
+  it('returns null below the minimum sample, so the caller keeps the default', () => {
+    expect(estimatePitLoss(driverLaps(1, 90, 8, 14, 6))).toBeNull()
+  })
+
+  it('is unmoved by safety-car stops that dominate the distribution', () => {
+    // The 2026 Melbourne and Monaco races are mostly neutralised stops: their
+    // MEDIAN loss is 52.0s and 48.4s, pure nonsense. Contamination is one-sided,
+    // so a low percentile still recovers a sane figure.
+    const green = [10, 20, 30, 40].flatMap((n, i) => driverLaps(n, 90, 8 + i, 14, 6))
+    const neutralised = [50, 60, 70, 80, 90, 99].flatMap((n, i) => driverLaps(n, 90, 8 + i, 30, 25))
+    const out = estimatePitLoss([...green, ...neutralised])
+    expect(out?.seconds).toBeCloseTo(20, 1)
+  })
+
+  it('rejects stops whose surrounding laps show the field was neutralised', () => {
+    // Reference laps far off the driver's own race pace mean a safety car, where
+    // pitting is much cheaper — including them would bias the circuit low.
+    const laps = driverLaps(1, 90, 10, 14, 6)
+    for (const l of laps) if (l.lapNumber >= 5 && l.lapNumber <= 15 && !l.isPitInLap && !l.isPitOutLap) {
+      l.lapTime = 90 * 1.3
+    }
+    expect(estimatePitLoss(laps)).toBeNull()
+  })
+
+  it('discards physically impossible losses', () => {
+    const laps = [10, 20, 30, 40, 50].flatMap((n, i) => driverLaps(n, 90, 8 + i, 300, 200))
+    expect(estimatePitLoss(laps)).toBeNull()
   })
 })

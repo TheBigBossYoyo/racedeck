@@ -4,7 +4,12 @@ import { WidgetFrame } from '@renderer/components/ui/WidgetFrame'
 import { EmptyState, Badge } from '@renderer/components/ui/primitives'
 import { useSessionStore } from '@renderer/store/sessionStore'
 import { useFocusDriver, pickDriver } from '@renderer/lib/useFocusDriver'
-import { StrategyEngine, type PitVerdict, type RejoinCar } from '@renderer/core/engines/StrategyEngine'
+import {
+  StrategyEngine,
+  circuitPitLoss,
+  type PitVerdict,
+  type RejoinCar
+} from '@renderer/core/engines/StrategyEngine'
 import { cn, hexColor } from '@renderer/lib/utils'
 
 const VERDICT_TONE: Record<PitVerdict, { text: string; ring: string; bg: string }> = {
@@ -36,6 +41,12 @@ export function PitStopPredictor() {
     return StrategyEngine.predictPitStop(snapshot, driver, getDriverLaps(driver))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [snapshot, driver])
+
+  /** Whether the pit loss behind the projection was measured here or assumed. */
+  const pitLoss = useMemo(
+    () => (snapshot ? circuitPitLoss(snapshot) : { seconds: 0, sampleSize: 0, source: 'default' as const }),
+    [snapshot]
+  )
 
   const driverMeta = useMemo(
     () => new Map((snapshot?.drivers ?? []).map((d) => [d.number, d])),
@@ -95,6 +106,7 @@ export function PitStopPredictor() {
       ) : (
         <PredictionBody
           prediction={prediction}
+          pitLoss={pitLoss}
           colorOf={color}
           codeOf={(n) => driverMeta.get(n)?.code ?? `#${n}`}
         />
@@ -105,10 +117,12 @@ export function PitStopPredictor() {
 
 function PredictionBody({
   prediction: p,
+  pitLoss,
   colorOf,
   codeOf
 }: {
   prediction: NonNullable<ReturnType<typeof StrategyEngine.predictPitStop>>
+  pitLoss: ReturnType<typeof circuitPitLoss>
   colorOf: (n: number) => string
   codeOf: (n: number) => string
 }) {
@@ -194,8 +208,13 @@ function PredictionBody({
       </ul>
 
       <p className="text-2xs text-fg-subtle">
-        Projection assumes rivals hold station · pit loss ~{p.greenPitLossSec.toFixed(0)}s green ·
-        recover in ~{p.recoveryLaps?.toFixed(0)} laps of fresh-tyre pace. All figures are estimates.
+        Projection assumes rivals hold station · pit loss ~{p.greenPitLossSec.toFixed(0)}s green
+        {/* Pit loss is a property of the circuit, so say when it was measured
+            here rather than assumed — it changes how much to trust the number. */}
+        {pitLoss.source === 'measured'
+          ? ` (measured from ${pitLoss.sampleSize} stops at this circuit)`
+          : ' (typical value — this session has too few stops to measure yet)'}{' '}
+        · recover in ~{p.recoveryLaps?.toFixed(0)} laps of fresh-tyre pace. All figures are estimates.
       </p>
     </>
   )

@@ -684,9 +684,44 @@ export interface LapRecord {
   sector3: number | null
   compound: TyreCompound | null
   tComplete: number
+  /** Car was in the pit lane during this lap (from TimingData's InPit). */
+  isPitInLap: boolean
+  /** Lap immediately following a pit exit. */
+  isPitOutLap: boolean
 }
 
-export function lapRecordToSample(r: LapRecord): LapSample {
+/**
+ * Which laps were pit in-laps and out-laps, from `PitLaneTimeCollection`.
+ *
+ * F1 states the pit lap outright, so this is exact where the feed exists —
+ * unlike watching TimingData's InPit flag, which also goes true when the field
+ * sits in the pit lane before the start or during a red flag.
+ */
+export function pitLapIndex(pitLaneTimes: PitLaneTime[]): { in: Set<string>; out: Set<string> } {
+  const inLaps = new Set<string>()
+  const outLaps = new Set<string>()
+  for (const p of pitLaneTimes) {
+    if (p.lap == null) continue
+    inLaps.add(`${p.driverNumber}:${p.lap}`)
+    outLaps.add(`${p.driverNumber}:${p.lap + 1}`)
+  }
+  return { in: inLaps, out: outLaps }
+}
+
+/**
+ * Convert an internal lap record to the shared LapSample.
+ *
+ * `isPitInLap` / `isPitOutLap` were previously hard-coded false here, so for
+ * every F1 session the six engines that exclude in- and out-laps from "clean"
+ * pace (analytics, fuel, practice, qualifying, strategy) were silently including
+ * laps 10-20s off the pace. Pass `pitLaps` to use F1's own statement of which
+ * laps those were; without it the record's InPit-derived flags are used.
+ */
+export function lapRecordToSample(
+  r: LapRecord,
+  pitLaps?: { in: Set<string>; out: Set<string> }
+): LapSample {
+  const key = `${r.driverNumber}:${r.lapNumber}`
   return {
     driverNumber: r.driverNumber,
     lapNumber: r.lapNumber,
@@ -697,8 +732,8 @@ export function lapRecordToSample(r: LapRecord): LapSample {
     speedI1: null,
     speedI2: null,
     speedST: null,
-    isPitOutLap: false,
-    isPitInLap: false,
+    isPitOutLap: pitLaps ? pitLaps.out.has(key) : r.isPitOutLap,
+    isPitInLap: pitLaps ? pitLaps.in.has(key) : r.isPitInLap,
     compound: r.compound,
     dateStart: null,
     sessionTime: r.tComplete

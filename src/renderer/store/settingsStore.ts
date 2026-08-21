@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 import { STORE_NS } from '@shared/ipc-contract'
 import { DEFAULT_TOD_URL } from '@shared/constants'
-import { defaultAiConfig, type AiConfig } from '@shared/ai'
+import { defaultAiConfig, migrateAiConfig, type AiConfig } from '@shared/ai'
 import { persist } from './persist'
 import { ThemeEngine, DEFAULT_THEME, type ThemeConfig } from '@renderer/core/engines/ThemeEngine'
 import { DEFAULT_ALERT_CONFIG, type AlertConfig } from '@renderer/core/engines/AlertEngine'
@@ -165,7 +165,9 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       alerts: { ...DEFAULT_ALERT_CONFIG, ...(alerts ?? {}), favorites: mergedFavorites },
       favorites: mergedFavorites,
       tod: normalizeTodPrefs(tod),
-      ai: { ...defaultAiConfig(), ...(ai ?? {}) },
+      // Retired provider models are rewritten on load — a stored ID the provider
+      // no longer serves would otherwise fail every request until noticed by hand.
+      ai: migrateAiConfig({ ...defaultAiConfig(), ...(ai ?? {}) }),
       market: { ...defaultMarketConfig(), ...(market ?? {}) },
       voice: normalizeVoiceConfig(voice),
       modules: { ...defaultModules(), ...(modules ?? {}) },
@@ -292,11 +294,11 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     const importedAi = (data.ai as Partial<AiConfig>) ?? {}
     await aiPersistQueue.catch(() => undefined)
     const persistedAi = await persist.get<AiConfig>(STORE_NS.SETTINGS, K.ai)
-    const ai = {
+    const ai = migrateAiConfig({
       ...defaultAiConfig(),
       ...importedAi,
       apiKey: importedAi.apiKey || get().ai.apiKey || persistedAi?.apiKey || ''
-    }
+    })
     const market = { ...defaultMarketConfig(), ...((data.market as Partial<MarketConfig>) ?? {}) }
     const voice = normalizeVoiceConfig(data.voice as Partial<VoiceConfig>)
     const modules = { ...defaultModules(), ...((data.modules as ModuleFlags) ?? {}) }

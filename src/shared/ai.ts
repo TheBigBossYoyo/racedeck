@@ -38,8 +38,11 @@ export const AI_PROVIDERS: Record<AiProviderId, AiProviderMeta> = {
     free: true,
     kind: 'gemini',
     baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
-    defaultModel: 'gemini-2.0-flash',
-    models: ['gemini-2.0-flash', 'gemini-2.0-flash-lite', 'gemini-1.5-flash', 'gemini-1.5-flash-8b'],
+    // Google retired the 1.5 family (404s) and shut down 2.0 Flash / Flash-Lite
+    // on 2026-06-01, which had left every model here dead — on the DEFAULT
+    // provider. 3.7 Flash is the current stable Flash model.
+    defaultModel: 'gemini-3.7-flash',
+    models: ['gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash-lite', 'gemini-2.5-flash'],
     keyUrl: 'https://aistudio.google.com/apikey',
     note: 'Recommended. Generous free tier via Google AI Studio — no credit card, fast Flash models.'
   },
@@ -49,10 +52,14 @@ export const AI_PROVIDERS: Record<AiProviderId, AiProviderMeta> = {
     free: true,
     kind: 'openai',
     baseUrl: 'https://api.groq.com/openai/v1',
-    defaultModel: 'llama-3.3-70b-versatile',
-    models: ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant', 'openai/gpt-oss-20b'],
+    // Groq decommissioned llama-3.3-70b-versatile and llama-3.1-8b-instant on
+    // 2026-08-16; requests to either now fail. Their documented successors are
+    // openai/gpt-oss-120b (flagship) and openai/gpt-oss-20b (faster), with
+    // qwen/qwen3.6-27b as the other suggested replacement for the 70B.
+    defaultModel: 'openai/gpt-oss-120b',
+    models: ['openai/gpt-oss-120b', 'openai/gpt-oss-20b', 'qwen/qwen3.6-27b'],
     keyUrl: 'https://console.groq.com/keys',
-    note: 'Free and extremely fast inference of open models (Llama, GPT-OSS). Great for live sessions.'
+    note: 'Free and extremely fast inference of open models (GPT-OSS, Qwen). Great for live sessions.'
   },
   openrouter: {
     id: 'openrouter',
@@ -60,14 +67,18 @@ export const AI_PROVIDERS: Record<AiProviderId, AiProviderMeta> = {
     free: true,
     kind: 'openai',
     baseUrl: 'https://openrouter.ai/api/v1',
-    defaultModel: 'meta-llama/llama-3.3-70b-instruct:free',
+    // OpenRouter's ":free" catalogue ROTATES — models come and go within months,
+    // and all three previously listed here had already been withdrawn. Verified
+    // live against https://openrouter.ai/api/v1/models, which is public and the
+    // right place to re-check when one stops answering.
+    defaultModel: 'nvidia/nemotron-3.5-lightning:free',
     models: [
-      'meta-llama/llama-3.3-70b-instruct:free',
-      'google/gemini-2.0-flash-exp:free',
-      'deepseek/deepseek-chat-v3-0324:free'
+      'nvidia/nemotron-3.5-lightning:free',
+      'nvidia/nemotron-3-super-120b-a12b:free',
+      'google/gemma-4-31b-it:free'
     ],
     keyUrl: 'https://openrouter.ai/keys',
-    note: 'Single key, many models — several marked ":free". Rate-limited but no cost.'
+    note: 'Single key, many models — several marked ":free". Rate-limited but no cost; the free list rotates.'
   },
   deepseek: {
     id: 'deepseek',
@@ -86,8 +97,10 @@ export const AI_PROVIDERS: Record<AiProviderId, AiProviderMeta> = {
     free: false,
     kind: 'openai',
     baseUrl: 'https://api.openai.com/v1',
+    // gpt-4o-mini is kept as the default because it is long-lived and still
+    // served; the 5.x minis are the current generation.
     defaultModel: 'gpt-4o-mini',
-    models: ['gpt-4o-mini', 'gpt-4.1-mini', 'o4-mini'],
+    models: ['gpt-4o-mini', 'gpt-5.4-mini', 'gpt-5.4-nano', 'gpt-5-mini'],
     keyUrl: 'https://platform.openai.com/api-keys',
     note: 'Paid. Reliable quality if you already have an account.'
   },
@@ -126,6 +139,50 @@ export interface AiConfig {
 export function defaultAiConfig(): AiConfig {
   const p = AI_PROVIDERS.gemini
   return { provider: p.id, apiKey: '', model: p.defaultModel, baseUrl: p.baseUrl, enabled: false }
+}
+
+/**
+ * Models a provider has RETIRED, mapped to the successor it documents.
+ *
+ * Changing a provider's `defaultModel` does not help anyone who already picked a
+ * model: the stored setting wins over the default at hydration, so a user stays
+ * pinned to an ID the provider no longer serves and every request fails. Keyed by
+ * provider because the same family name means different IDs on different hosts.
+ *
+ * Groq decommissioned its Llama 3.x endpoints on 2026-08-16 and names GPT-OSS as
+ * the replacement for both. Its retired Qwen 3-32B maps to the flagship too.
+ */
+const RETIRED_MODELS: Partial<Record<AiProviderId, Record<string, string>>> = {
+  gemini: {
+    'gemini-2.0-flash': 'gemini-3.7-flash',
+    'gemini-2.0-flash-lite': 'gemini-3.5-flash-lite',
+    'gemini-2.0-flash-001': 'gemini-3.7-flash',
+    'gemini-1.5-flash': 'gemini-3.7-flash',
+    'gemini-1.5-flash-8b': 'gemini-3.5-flash-lite',
+    'gemini-1.5-pro': 'gemini-3.7-flash'
+  },
+  groq: {
+    'llama-3.3-70b-versatile': 'openai/gpt-oss-120b',
+    'llama-3.1-8b-instant': 'openai/gpt-oss-20b',
+    'qwen/qwen3-32b': 'openai/gpt-oss-120b',
+    'gemma2-9b-it': 'openai/gpt-oss-20b',
+    'deepseek-r1-distill-llama-70b': 'openai/gpt-oss-120b',
+    'mistral-saba-24b': 'qwen/qwen3.6-27b',
+    'moonshotai/kimi-k2-instruct-0905': 'openai/gpt-oss-120b',
+    'meta-llama/llama-4-maverick-17b-128e-instruct': 'openai/gpt-oss-120b'
+  }
+}
+
+/**
+ * Move a stored config off a model its provider has retired. Returns the config
+ * unchanged when nothing is stale, so callers can apply it unconditionally.
+ * Never touches `custom`, where the user's own endpoint defines what is valid.
+ */
+export function migrateAiConfig(config: AiConfig): AiConfig {
+  if (config.provider === 'custom') return config
+  const replacement = RETIRED_MODELS[config.provider]?.[config.model]
+  if (!replacement) return config
+  return { ...config, model: replacement }
 }
 
 export interface AiMessage {
