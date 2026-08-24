@@ -62,6 +62,35 @@ test('loads the demo session into the timing tower', async () => {
   await expect(window.getByText('VER', { exact: true }).first()).toBeVisible({ timeout: 20_000 })
 })
 
+test('shows a visible keyboard focus ring on Track Map markers', async () => {
+  const window = mainWindow
+  await window.keyboard.press('1')
+  await window.getByTitle('Reset layout to preset').click()
+
+  const trackMapTitle = window.getByText('Track Map', { exact: true })
+  const trackMapPanel = trackMapTitle.locator('xpath=ancestor::div[contains(@class,"glass")][1]')
+  const marker = trackMapPanel.locator('svg g[role="button"]').first()
+
+  await expect(marker).toBeVisible({ timeout: 20_000 })
+
+  let focused = false
+  for (let index = 0; index < 80; index += 1) {
+    await window.keyboard.press('Tab')
+    focused = await marker.evaluate((element) => element === document.activeElement)
+    if (focused) {
+      break
+    }
+  }
+
+  expect(focused).toBe(true)
+
+  const focusRing = marker.locator('[data-testid="track-map-focus-ring"]')
+  await expect(focusRing).toBeVisible()
+  await expect
+    .poll(async () => Number(await focusRing.evaluate((element) => getComputedStyle(element).opacity)))
+    .toBeGreaterThan(0.5)
+})
+
 test('shows readable battery mode, tyre age and one credible fastest lap in Broadcast + Data', async () => {
   const window = mainWindow
   await window.keyboard.press('1')
@@ -130,11 +159,16 @@ test('renders a coherent Strategy Wall and stays conservative at race start', as
     await expect(window.getByText(title, { exact: true })).toBeVisible()
   }
 
-  const dossierTitle = window.getByText('Driver Dossier', { exact: true })
-  const dossierWidget = dossierTitle.locator('xpath=ancestor::div[contains(@class,"glass")][1]')
+  const dossierWidget = window
+    .getByText('Driver Dossier', { exact: true })
+    .locator('xpath=ancestor::div[contains(@class,"react-grid-item")][1]')
   const dossierPia = dossierWidget.getByRole('button').filter({ hasText: 'PIA' }).first()
   await dossierPia.click()
   await expect(dossierPia).toHaveAttribute('aria-pressed', 'true')
+  await expect(window.getByText('Set age', { exact: true })).toBeVisible()
+  await expect(window.getByText('This stint', { exact: true })).toBeVisible()
+  await expect(window.getByText('Deg', { exact: true })).toBeVisible()
+  await expect(window.getByText('Battery', { exact: true })).toBeVisible()
   const pitTitleForFocus = window.getByText('Pit-Now Simulator', { exact: true })
   const pitWidgetForFocus = pitTitleForFocus.locator('xpath=ancestor::div[contains(@class,"glass")][1]')
   await expect(pitWidgetForFocus.getByRole('button').filter({ hasText: 'PIA' }).first()).toHaveAttribute(

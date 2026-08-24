@@ -3,16 +3,12 @@ import {
   StrategyEngine,
   analysePitLane,
   estimatePitLoss,
-  servedTimePenalties
+  servedTimePenalties,
+  fuelCorrectedLapTimes
 } from '@renderer/core/engines/StrategyEngine'
+import type { FuelCoefficient } from '@renderer/core/engines/FuelModel'
 import type { RaceSnapshot } from '@renderer/core/providers/types'
-import type {
-  Driver,
-  LapSample,
-  TimingEntry,
-  TrackStatus,
-  SectorTime
-} from '@shared/models'
+import type { Driver, LapSample, TimingEntry, TrackStatus, SectorTime } from '@shared/models'
 
 // ── Tiny snapshot builder for precise, deterministic assertions ────────────────
 
@@ -190,6 +186,47 @@ describe('StrategyEngine.degradationTrend', () => {
   })
 })
 
+describe('fuelCorrectedLapTimes', () => {
+  it("excludes in/out laps and slices to the last N, matching degradationTrend's own filtering", () => {
+    const laps = degradingLaps(8)
+    const withOutlap: LapSample[] = [{ ...laps[0], isPitOutLap: true }, ...laps.slice(1)]
+
+    const corrected = fuelCorrectedLapTimes(withOutlap, 6)
+
+    expect(corrected).toHaveLength(6)
+    expect(corrected.map((l) => l.lapNumber)).toEqual([3, 4, 5, 6, 7, 8])
+  })
+
+  it('returns raw lap times unchanged when no fuel coefficient is given', () => {
+    const laps = degradingLaps(4)
+
+    const corrected = fuelCorrectedLapTimes(laps, 4)
+
+    expect(corrected.map((l) => l.correctedSec)).toEqual(laps.map((l) => l.lapTime))
+  })
+
+  it("reproduces degradationTrend's least-squares slope from its own corrected series", () => {
+    const laps = degradingLaps(6)
+    const coeff: FuelCoefficient = { sPerLap: 0.04, confidence: 'measured', totalLaps: 50 }
+
+    const corrected = fuelCorrectedLapTimes(laps, 6, coeff)
+    const n = corrected.length
+    const xs = corrected.map((_, i) => i)
+    const ys = corrected.map((l) => l.correctedSec)
+    const meanX = xs.reduce((a, b) => a + b, 0) / n
+    const meanY = ys.reduce((a, b) => a + b, 0) / n
+    let num = 0
+    let den = 0
+    for (let i = 0; i < n; i++) {
+      num += (xs[i] - meanX) * (ys[i] - meanY)
+      den += (xs[i] - meanX) ** 2
+    }
+    const reconstructedSlope = num / den
+
+    expect(reconstructedSlope).toBeCloseTo(StrategyEngine.degradationTrend(laps, 6, coeff)!, 6)
+  })
+})
+
 describe('StrategyEngine.predictPitStop', () => {
   it('projects the rejoin position, positions lost and rejoin neighbours', () => {
     // Gaps to leader: P1=0, P2=2, P3=5, P4=25, P5=28, P6=40
@@ -259,7 +296,11 @@ describe('StrategyEngine.predictPitStop', () => {
   })
 
   it('recommends switching off dry tyres when rain is reported', () => {
-    const snap = makeSnapshot([0, 2, 5, 25], 'CLEAR', { currentLap: 20, stintAge: 8, compound: 'MEDIUM' })
+    const snap = makeSnapshot([0, 2, 5, 25], 'CLEAR', {
+      currentLap: 20,
+      stintAge: 8,
+      compound: 'MEDIUM'
+    })
     snap.weather = {
       date: '2024-01-01T00:30:00Z',
       airTemp: 20,
@@ -276,7 +317,12 @@ describe('StrategyEngine.predictPitStop', () => {
   })
 
   it('stays out on lap one clear track even when bunching makes the raw undercut positive', () => {
-    const snap = makeSnapshot([0, 0.45, 1.1, 9], 'CLEAR', { currentLap: 1, lapNumber: 1, stintAge: 1, clock: 80 })
+    const snap = makeSnapshot([0, 0.45, 1.1, 9], 'CLEAR', {
+      currentLap: 1,
+      lapNumber: 1,
+      stintAge: 1,
+      clock: 80
+    })
     const p = StrategyEngine.predictPitStop(snap, 2, [], 21.5)
 
     expect(p.undercutNetSec).toBeGreaterThan(0)
@@ -285,12 +331,41 @@ describe('StrategyEngine.predictPitStop', () => {
   })
 
   it('ignores future laps when estimating degradation in replay', () => {
-    const snap = makeSnapshot([0, 2, 5, 25], 'CLEAR', { currentLap: 4, lapNumber: 4, stintAge: 4, clock: 359 })
+    const snap = makeSnapshot([0, 2, 5, 25], 'CLEAR', {
+      currentLap: 4,
+      lapNumber: 4,
+      stintAge: 4,
+      clock: 359
+    })
     const replayLaps = timedLaps([90, 90, 90, 90, 95, 96], [80, 170, 260, 350, 440, 530])
     const p = StrategyEngine.predictPitStop(snap, 2, replayLaps, 21.5)
 
-    expect(p.degradationSlope).toBeCloseTo(0, 5)
+    // The four visible laps are flat, so the ONLY slope is the fuel correction
+    // (~0.055s/lap) — nowhere near what the excluded 95/96 laps would produce.
+    // That is the point of the test: future laps must not reach the estimate.
+    expect(p.degradationSlope).toBeCloseTo(0.055, 2)
     expect(p.verdict).toBe('STAY OUT')
+    // APP_IMPROVEMENT_ROADMAP.md P1 item 14: with a known sub-threshold slope,
+    // STAY OUT states the numeric gap to the nearest actionable band.
+    expect(p.rationale.join(' ')).toMatch(
+      /needs ~\+0\.0\ds\/lap more degradation to trigger a stop call/i
+    )
+  })
+
+  it('omits the flip-condition line when no degradation slope is known at all', () => {
+    // Lap one, no lap history — degradationSlope is null, so there is nothing
+    // to compare against the PREPARE threshold.
+    const snap = makeSnapshot([0, 0.45, 1.1, 9], 'CLEAR', {
+      currentLap: 1,
+      lapNumber: 1,
+      stintAge: 1,
+      clock: 80
+    })
+    const p = StrategyEngine.predictPitStop(snap, 2, [], 21.5)
+
+    expect(p.degradationSlope).toBeNull()
+    expect(p.verdict).toBe('STAY OUT')
+    expect(p.rationale.join(' ')).not.toMatch(/more degradation to trigger/i)
   })
 })
 
@@ -302,8 +377,13 @@ describe('analysePitLane', () => {
   })
   /** A tight, realistic pit lane: median 25.0s, sub-second spread. */
   const clean = [
-    stop(1, 24.6), stop(3, 24.9), stop(5, 25.0), stop(10, 25.1),
-    stop(11, 25.3), stop(16, 24.8), stop(44, 25.2)
+    stop(1, 24.6),
+    stop(3, 24.9),
+    stop(5, 25.0),
+    stop(10, 25.1),
+    stop(11, 25.3),
+    stop(16, 24.8),
+    stop(44, 25.2)
   ]
 
   it('reports the pit lane median from measured stops', () => {
@@ -347,8 +427,15 @@ describe('analysePitLane', () => {
     // lands in the measured time and would otherwise read as a slow stop.
     const rc = [
       {
-        id: 'p1', date: '', category: 'Other', flag: 'NONE', scope: null, sector: null,
-        driverNumber: 27, lapNumber: 12, severity: 'info',
+        id: 'p1',
+        date: '',
+        category: 'Other',
+        flag: 'NONE',
+        scope: null,
+        sector: null,
+        driverNumber: 27,
+        lapNumber: 12,
+        severity: 'info',
         message: 'FIA STEWARDS: 10 SECOND TIME PENALTY FOR CAR 27 (HUL) - CAUSING A COLLISION'
       }
     ] as unknown as Parameters<typeof analysePitLane>[1]
@@ -360,8 +447,15 @@ describe('analysePitLane', () => {
   it('still flags a slow stop that a penalty alone cannot explain', () => {
     const rc = [
       {
-        id: 'p1', date: '', category: 'Other', flag: 'NONE', scope: null, sector: null,
-        driverNumber: 27, lapNumber: 12, severity: 'info',
+        id: 'p1',
+        date: '',
+        category: 'Other',
+        flag: 'NONE',
+        scope: null,
+        sector: null,
+        driverNumber: 27,
+        lapNumber: 12,
+        severity: 'info',
         message: 'FIA STEWARDS: 5 SECOND TIME PENALTY FOR CAR 27 (HUL) - SPEEDING IN THE PIT LANE'
       }
     ] as unknown as Parameters<typeof analysePitLane>[1]
@@ -376,7 +470,9 @@ describe('analysePitLane', () => {
 describe('servedTimePenalties', () => {
   it('parses the stewards message format', () => {
     const msgs = [
-      { message: 'FIA STEWARDS: 5 SECOND TIME PENALTY FOR CAR 10 (GAS) - SPEEDING IN THE PIT LANE' },
+      {
+        message: 'FIA STEWARDS: 5 SECOND TIME PENALTY FOR CAR 10 (GAS) - SPEEDING IN THE PIT LANE'
+      },
       { message: 'FIA STEWARDS: 10 SECOND TIME PENALTY FOR CAR 27 (HUL) - CAUSING A COLLISION' },
       { message: 'CHEQUERED FLAG' }
     ] as unknown as Parameters<typeof servedTimePenalties>[0]
@@ -415,9 +511,14 @@ describe('estimatePitLoss', () => {
         lapTime: base + (isIn ? inExcess : isOut ? outExcess : 0),
         isPitInLap: isIn,
         isPitOutLap: isOut,
-        sector1: null, sector2: null, sector3: null,
-        speedI1: null, speedI2: null, speedST: null,
-        compound: null, dateStart: null
+        sector1: null,
+        sector2: null,
+        sector3: null,
+        speedI1: null,
+        speedI2: null,
+        speedST: null,
+        compound: null,
+        dateStart: null
       })
     }
     return laps
@@ -449,9 +550,10 @@ describe('estimatePitLoss', () => {
     // Reference laps far off the driver's own race pace mean a safety car, where
     // pitting is much cheaper — including them would bias the circuit low.
     const laps = driverLaps(1, 90, 10, 14, 6)
-    for (const l of laps) if (l.lapNumber >= 5 && l.lapNumber <= 15 && !l.isPitInLap && !l.isPitOutLap) {
-      l.lapTime = 90 * 1.3
-    }
+    for (const l of laps)
+      if (l.lapNumber >= 5 && l.lapNumber <= 15 && !l.isPitInLap && !l.isPitOutLap) {
+        l.lapTime = 90 * 1.3
+      }
     expect(estimatePitLoss(laps)).toBeNull()
   })
 

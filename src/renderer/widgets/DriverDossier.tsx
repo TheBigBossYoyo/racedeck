@@ -10,6 +10,13 @@ import {
   planRemainingStrategy,
   paceComparison
 } from '@renderer/core/engines/StrategyEngine'
+import { buildTyreRead } from '@renderer/core/engines/TyreRead'
+import { TyrePanel } from '@renderer/widgets/driverDossier/TyrePanel'
+import {
+  BattleLine,
+  DossierStat as Stat,
+  SpeedMarks
+} from '@renderer/widgets/driverDossier/DossierDetails'
 import type { AeroMode, SectorTime } from '@shared/models'
 import { formatLapTime, formatGap, hexColor, cn } from '@renderer/lib/utils'
 
@@ -17,15 +24,6 @@ const SECTOR_TONE: Record<SectorTime['state'], string> = {
   none: 'text-fg',
   'personal-best': 'text-good',
   'session-best': 'text-purple'
-}
-
-function Stat({ label, value, tone }: { label: string; value: string; tone?: string }) {
-  return (
-    <div className="rounded-lg border border-hairline/15 bg-black/20 px-2 py-1">
-      <div className="text-[9px] uppercase tracking-wide text-fg-subtle">{label}</div>
-      <div className={cn('tnum text-xs font-semibold', tone ?? 'text-fg')}>{value}</div>
-    </div>
-  )
 }
 
 export function DriverDossier() {
@@ -39,7 +37,7 @@ export function DriverDossier() {
     () =>
       driver == null
         ? null
-        : (snapshot?.sessionBests ?? []).find((b) => b.driverNumber === driver)?.speeds ?? null,
+        : ((snapshot?.sessionBests ?? []).find((b) => b.driverNumber === driver)?.speeds ?? null),
     [snapshot, driver]
   )
 
@@ -62,23 +60,32 @@ export function DriverDossier() {
       const samples = getTelemetry(driver, 8)
       aeroMode = samples.length > 0 ? (samples[samples.length - 1].aeroMode ?? null) : null
     }
-    return { entry, meta, pit, plan, battle, recent, bestLap: entry.bestLap, aeroMode }
+    const tyre = buildTyreRead(snapshot, entry, laps)
+    return { entry, meta, pit, plan, battle, recent, bestLap: entry.bestLap, aeroMode, tyre }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [snapshot, driver])
 
   if (!snapshot) {
     return (
       <WidgetFrame title="Driver Dossier" icon={<IdCard />}>
-        <EmptyState icon={<IdCard />} title="No session loaded" hint="Load a race to open the driver dossier." />
+        <EmptyState
+          icon={<IdCard />}
+          title="No session loaded"
+          hint="Load a race to open the driver dossier."
+        />
       </WidgetFrame>
     )
   }
 
   const pickList = snapshot.timing.slice(0, 20)
-  const colorOf = (n: number) => hexColor(snapshot.drivers.find((d) => d.number === n)?.teamColour ?? null)
 
   return (
-    <WidgetFrame title="Driver Dossier" icon={<IdCard />} subtitle="everything, one driver" bodyClassName="flex flex-col gap-2">
+    <WidgetFrame
+      title="Driver Dossier"
+      icon={<IdCard />}
+      subtitle="everything, one driver"
+      bodyClassName="flex flex-col gap-2"
+    >
       {/* Driver picker */}
       <div className="no-drag relative z-20 -mx-1 flex shrink-0 gap-1 overflow-x-auto overflow-y-hidden px-1 pb-1">
         {pickList.map((t) => {
@@ -90,7 +97,9 @@ export function DriverDossier() {
               aria-pressed={active}
               className={cn(
                 'relative z-10 flex shrink-0 items-center gap-1 rounded-md border px-1.5 py-1 text-[11px] font-bold transition-colors',
-                active ? 'border-accent/50 bg-accent/15 text-fg' : 'border-hairline/25 text-fg-muted hover:bg-white/5'
+                active
+                  ? 'border-accent/50 bg-accent/15 text-fg'
+                  : 'border-hairline/25 text-fg-muted hover:bg-white/5'
               )}
             >
               <span className="tnum text-fg-subtle">{t.position}</span>
@@ -107,14 +116,18 @@ export function DriverDossier() {
           {/* Identity */}
           <div
             className="flex items-center gap-2.5 rounded-xl p-2.5"
-            style={{ background: `linear-gradient(90deg, ${colorOf(driver!)}22, transparent)` }}
+            style={{
+              background: `linear-gradient(90deg, ${hexColor(model.meta.teamColour)}22, transparent)`
+            }}
           >
             <div className="tnum grid h-10 w-10 place-items-center rounded-lg bg-black/30 text-lg font-extrabold text-fg">
               {model.entry.position ?? '—'}
             </div>
             <div className="min-w-0">
               <div className="flex items-center gap-1.5">
-                <span className="text-base font-extrabold tracking-tight text-fg">{model.meta.code}</span>
+                <span className="text-base font-extrabold tracking-tight text-fg">
+                  {model.meta.code}
+                </span>
                 <span className="truncate text-xs text-fg-muted">{model.meta.fullName}</span>
               </div>
               <div className="truncate text-2xs text-fg-subtle">{model.meta.teamName ?? '—'}</div>
@@ -146,68 +159,63 @@ export function DriverDossier() {
           <div className="grid grid-cols-4 gap-1.5">
             <Stat label="Leader" value={formatGap(model.entry.gapToLeader)} />
             <Stat label="Ahead" value={formatGap(model.entry.intervalAhead)} />
-            <Stat label="Behind" value={model.battle.behind?.gapSec != null ? `+${model.battle.behind.gapSec.toFixed(1)}` : '—'} />
+            <Stat
+              label="Behind"
+              value={
+                model.battle.behind?.gapSec != null
+                  ? `+${model.battle.behind.gapSec.toFixed(1)}`
+                  : '—'
+              }
+            />
             <Stat label="Stops" value={String(model.entry.pitStops ?? 0)} />
             <Stat label="Last" value={formatLapTime(model.entry.lastLap)} />
             <Stat label="Best" value={formatLapTime(model.entry.bestLap)} tone="text-purple" />
-            <Stat label="Lap" value={model.entry.lapNumber != null ? `${model.entry.lapNumber}` : '—'} />
-            <Stat label="Stint" value={model.entry.stintAge != null ? `${model.entry.stintAge}L` : '—'} />
+            <Stat
+              label="Lap"
+              value={model.entry.lapNumber != null ? `${model.entry.lapNumber}` : '—'}
+            />
+            <Stat
+              label="Stint"
+              value={model.entry.stintAge != null ? `${model.entry.stintAge}L` : '—'}
+            />
           </div>
 
           {/* Sectors */}
           <div className="grid grid-cols-3 gap-1.5">
-            {([model.entry.sector1, model.entry.sector2, model.entry.sector3] as SectorTime[]).map((s, i) => (
-              <div key={i} className="rounded-lg border border-hairline/15 bg-black/20 px-2 py-1 text-center">
-                <div className="text-[9px] uppercase tracking-wide text-fg-subtle">S{i + 1}</div>
-                <div className={cn('tnum text-xs font-semibold', SECTOR_TONE[s.state])}>
-                  {s.seconds != null ? s.seconds.toFixed(3) : '—'}
+            {([model.entry.sector1, model.entry.sector2, model.entry.sector3] as SectorTime[]).map(
+              (s, i) => (
+                <div
+                  key={i}
+                  className="rounded-lg border border-hairline/15 bg-black/20 px-2 py-1 text-center"
+                >
+                  <div className="text-[9px] uppercase tracking-wide text-fg-subtle">S{i + 1}</div>
+                  <div className={cn('tnum text-xs font-semibold', SECTOR_TONE[s.state])}>
+                    {s.seconds != null ? s.seconds.toFixed(3) : '—'}
+                  </div>
                 </div>
-              </div>
-            ))}
+              )
+            )}
           </div>
 
           {/* Speed marks (F1 TimingStats) — the two intermediates, finish line and
               speed trap, with where each ranks in the field. None of this can be
               derived from lap/sector timing; it only exists in this feed. */}
-          {speeds && (
-            <div>
-              <div className="mb-1 text-[9px] uppercase tracking-wide text-fg-subtle">
-                Best speeds (km/h · field rank)
-              </div>
-              <div className="grid grid-cols-4 gap-1.5">
-                {([
-                  ['I1', speeds.i1],
-                  ['I2', speeds.i2],
-                  ['FL', speeds.fl],
-                  ['Trap', speeds.st]
-                ] as const).map(([label, mark]) => (
-                  <div
-                    key={label}
-                    className="rounded-lg border border-hairline/15 bg-black/20 px-2 py-1 text-center"
-                  >
-                    <div className="text-[9px] uppercase tracking-wide text-fg-subtle">{label}</div>
-                    <div
-                      className={cn(
-                        'tnum text-xs font-semibold',
-                        mark.rank === 1 ? 'text-purple' : 'text-fg'
-                      )}
-                    >
-                      {mark.value != null ? mark.value : '—'}
-                    </div>
-                    {mark.rank != null && (
-                      <div className="text-[9px] tabular-nums text-fg-subtle">P{mark.rank}</div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
+          {speeds && <SpeedMarks speeds={speeds} />}
+
+          {/* Tyre read — age, wear trend and what it means, in one glance */}
+          <TyrePanel read={model.tyre} />
 
           {/* Battery energy (2026) */}
           <ErsGauge
             pct={model.entry.energyPct}
             mode={model.entry.deployMode}
             estimate={model.entry.energyIsEstimate}
+            confidence={model.entry.energyConfidence}
+            deploymentLimited={model.entry.energyDeploymentLimited}
+            staleMs={snapshot.feedFreshness?.CarData}
+            trend={model.entry.energyTrend}
+            trendDeltaPct={model.entry.energyTrendDeltaPct}
+            deployBudgetPct={model.entry.energyDeployBudgetPct}
           />
 
           {/* Active aero — shown only when data is available */}
@@ -238,18 +246,28 @@ export function DriverDossier() {
               <div className="flex items-center gap-1 text-[9px] uppercase tracking-wide text-fg-subtle">
                 <Gauge className="h-3 w-3" /> pit now
               </div>
-              <div className={cn('text-xs font-bold', model.pit.verdict === 'STAY OUT' ? 'text-fg' : 'text-accent')}>
+              <div
+                className={cn(
+                  'text-xs font-bold',
+                  model.pit.verdict === 'STAY OUT' ? 'text-fg' : 'text-accent'
+                )}
+              >
                 {model.pit.available ? model.pit.verdict : '—'}
               </div>
               {model.pit.available && model.pit.projectedPosition != null && (
-                <div className="text-2xs text-fg-subtle">rejoin ~P{model.pit.projectedPosition}</div>
+                <div className="text-2xs text-fg-subtle">
+                  rejoin ~P{model.pit.projectedPosition}
+                </div>
               )}
             </div>
             <div className="rounded-lg border border-hairline/20 bg-white/[0.02] px-2 py-1.5">
               <div className="flex items-center gap-1 text-[9px] uppercase tracking-wide text-fg-subtle">
                 <Route className="h-3 w-3" /> optimal plan
               </div>
-              <div className="truncate text-xs font-bold text-fg" title={model.plan.recommended?.label}>
+              <div
+                className="truncate text-xs font-bold text-fg"
+                title={model.plan.recommended?.label}
+              >
                 {model.plan.recommended?.label ?? (model.plan.reason ? '—' : '…')}
               </div>
               <div className="truncate text-2xs text-fg-subtle" title={model.plan.ruleLabel}>
@@ -266,23 +284,41 @@ export function DriverDossier() {
 
           {/* Pace battle mini */}
           <div className="space-y-1">
-            <BattleLine icon={<Crosshair className="h-3 w-3" />} label="ahead" rival={model.battle.ahead} side="ahead" />
-            <BattleLine icon={<ShieldAlert className="h-3 w-3" />} label="behind" rival={model.battle.behind} side="behind" />
+            <BattleLine
+              icon={<Crosshair className="h-3 w-3" />}
+              label="ahead"
+              rival={model.battle.ahead}
+              side="ahead"
+            />
+            <BattleLine
+              icon={<ShieldAlert className="h-3 w-3" />}
+              label="behind"
+              rival={model.battle.behind}
+              side="behind"
+            />
           </div>
 
           {/* Recent laps */}
           {model.recent.length > 0 && (
             <div>
-              <div className="mb-1 text-[9px] font-semibold uppercase tracking-wide text-fg-subtle">Recent laps</div>
+              <div className="mb-1 text-[9px] font-semibold uppercase tracking-wide text-fg-subtle">
+                Recent laps
+              </div>
               <div className="space-y-0.5">
                 {model.recent.map((l) => {
-                  const delta = model.bestLap != null && l.lapTime != null ? l.lapTime - model.bestLap : null
+                  const delta =
+                    model.bestLap != null && l.lapTime != null ? l.lapTime - model.bestLap : null
                   return (
                     <div key={l.lapNumber} className="flex items-center gap-2 text-2xs">
                       <span className="tnum w-8 text-fg-subtle">L{l.lapNumber}</span>
                       <span className="tnum font-semibold text-fg">{formatLapTime(l.lapTime)}</span>
                       <TyrePill compound={l.compound} size="sm" />
-                      <span className={cn('tnum ml-auto', delta != null && delta < 0.001 ? 'text-purple' : 'text-fg-subtle')}>
+                      <span
+                        className={cn(
+                          'tnum ml-auto',
+                          delta != null && delta < 0.001 ? 'text-purple' : 'text-fg-subtle'
+                        )}
+                      >
                         {delta != null ? (delta < 0.001 ? 'best' : `+${delta.toFixed(3)}`) : ''}
                       </span>
                     </div>
@@ -299,39 +335,5 @@ export function DriverDossier() {
         </>
       )}
     </WidgetFrame>
-  )
-}
-
-function BattleLine({
-  icon,
-  label,
-  rival,
-  side
-}: {
-  icon: React.ReactNode
-  label: string
-  rival: import('@renderer/core/engines/StrategyEngine').PaceRival | null
-  side: 'ahead' | 'behind'
-}) {
-  if (!rival) {
-    return (
-      <div className="flex items-center gap-1.5 rounded-md border border-hairline/15 px-2 py-1 text-2xs text-fg-subtle">
-        {icon}
-        {label}: clear
-      </div>
-    )
-  }
-  const tone = rival.closing ? (side === 'ahead' ? 'text-good' : 'text-danger') : 'text-fg-muted'
-  return (
-    <div className="flex items-center gap-1.5 rounded-md border border-hairline/15 bg-white/[0.015] px-2 py-1 text-2xs">
-      <span className="text-fg-subtle">{icon}</span>
-      <span className="font-bold text-fg">{rival.code}</span>
-      <span className="tnum text-fg-muted">{rival.gapSec != null ? `${rival.gapSec.toFixed(1)}s` : '—'}</span>
-      <span className={cn('ml-auto', tone)}>
-        {rival.deltaPerLap == null
-          ? '—'
-          : `${rival.deltaPerLap > 0 ? '+' : ''}${rival.deltaPerLap.toFixed(2)}s/lap${rival.closing && rival.lapsToResolve != null ? ` · ~${Math.ceil(rival.lapsToResolve)}L` : ''}`}
-      </span>
-    </div>
   )
 }

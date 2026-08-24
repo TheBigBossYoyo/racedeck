@@ -43,6 +43,7 @@ const api: RaceDeckApi = {
     back: () => ipcRenderer.send(IPC.VIDEO_BACK),
     openExternal: (url?: string) => ipcRenderer.invoke(IPC.VIDEO_OPEN_EXTERNAL, url),
     toggleDevTools: () => ipcRenderer.send(IPC.VIDEO_TOGGLE_DEVTOOLS),
+    probePlayback: () => ipcRenderer.invoke(IPC.VIDEO_PROBE_PLAYBACK),
     onStateChanged: (cb: (state: VideoModeState) => void) => {
       const listener = (_e: IpcRendererEvent, state: VideoModeState) => cb(state)
       ipcRenderer.on(IPC.VIDEO_STATE_CHANGED, listener)

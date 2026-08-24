@@ -50,11 +50,21 @@ function Row({
 }) {
   return (
     <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-2 border-b border-hairline/10 py-1.5">
-      <span className={cn('tnum mono text-right text-sm', betterA ? 'font-semibold text-good' : 'text-fg')}>
+      <span
+        className={cn(
+          'tnum mono text-right text-sm',
+          betterA ? 'font-semibold text-good' : 'text-fg'
+        )}
+      >
         {a}
       </span>
       <span className="text-[9px] uppercase tracking-wider text-fg-subtle">{label}</span>
-      <span className={cn('tnum mono text-left text-sm', betterB ? 'font-semibold text-good' : 'text-fg')}>
+      <span
+        className={cn(
+          'tnum mono text-left text-sm',
+          betterB ? 'font-semibold text-good' : 'text-fg'
+        )}
+      >
         {b}
       </span>
     </div>
@@ -82,7 +92,9 @@ export function DriverComparisonCard() {
     if (timing.length === 0) return
     const a = focusDriver ?? timing[0].driverNumber
     setANum(a)
-    setBNum((prev) => prev ?? teammateOf(a) ?? timing.find((t) => t.driverNumber !== a)?.driverNumber ?? a)
+    setBNum(
+      (prev) => prev ?? teammateOf(a) ?? timing.find((t) => t.driverNumber !== a)?.driverNumber ?? a
+    )
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focusDriver, timing.length])
 
@@ -105,7 +117,10 @@ export function DriverComparisonCard() {
   if (!snapshot || timing.length === 0 || !data || aNum == null || bNum == null) {
     return (
       <WidgetFrame title="Driver Comparison" icon={<Users />}>
-        <EmptyState title="No drivers" hint="Load a session and click a driver in the timing tower." />
+        <EmptyState
+          title="No drivers"
+          hint="Load a session and click a driver in the timing tower."
+        />
       </WidgetFrame>
     )
   }
@@ -123,6 +138,24 @@ export function DriverComparisonCard() {
     const sb = i === 1 ? b.sector1 : i === 2 ? b.sector2 : b.sector3
     if (sa.seconds == null || sb.seconds == null) return null
     return sa.seconds - sb.seconds
+  }
+
+  // Speed-trap/intermediate deltas (APP_IMPROVEMENT_ROADMAP.md P1 item 11):
+  // sessionBests was previously consumed only by Driver Dossier's SpeedMarks.
+  const bestsA = snapshot.sessionBests?.find((s) => s.driverNumber === aNum) ?? null
+  const bestsB = snapshot.sessionBests?.find((s) => s.driverNumber === bNum) ?? null
+  const SPEED_MARKS = [
+    { key: 'i1', label: 'I1' },
+    { key: 'i2', label: 'I2' },
+    { key: 'fl', label: 'FL' },
+    { key: 'st', label: 'Trap' }
+  ] as const
+  // Positive ⇒ A faster (higher km/h), matching the sign convention of the row below.
+  const speedDelta = (key: (typeof SPEED_MARKS)[number]['key']): number | null => {
+    const va = bestsA?.speeds[key].value
+    const vb = bestsB?.speeds[key].value
+    if (va == null || vb == null) return null
+    return va - vb
   }
 
   return (
@@ -147,10 +180,28 @@ export function DriverComparisonCard() {
       )}
 
       <div className="flex flex-col">
-        <Row label="Pos" a={`P${a.position ?? '—'}`} b={`P${b.position ?? '—'}`} betterA={(a.position ?? 99) < (b.position ?? 99)} betterB={(b.position ?? 99) < (a.position ?? 99)} />
+        <Row
+          label="Pos"
+          a={`P${a.position ?? '—'}`}
+          b={`P${b.position ?? '—'}`}
+          betterA={(a.position ?? 99) < (b.position ?? 99)}
+          betterB={(b.position ?? 99) < (a.position ?? 99)}
+        />
         <Row label="Gap → P1" a={formatGap(a.gapToLeader)} b={formatGap(b.gapToLeader)} />
-        <Row label="Last" a={formatLapTime(a.lastLap)} b={formatLapTime(b.lastLap)} betterA={num(a.lastLap) < num(b.lastLap)} betterB={num(b.lastLap) < num(a.lastLap)} />
-        <Row label="Best" a={formatLapTime(bestA)} b={formatLapTime(bestB)} betterA={num(bestA) < num(bestB)} betterB={num(bestB) < num(bestA)} />
+        <Row
+          label="Last"
+          a={formatLapTime(a.lastLap)}
+          b={formatLapTime(b.lastLap)}
+          betterA={num(a.lastLap) < num(b.lastLap)}
+          betterB={num(b.lastLap) < num(a.lastLap)}
+        />
+        <Row
+          label="Best"
+          a={formatLapTime(bestA)}
+          b={formatLapTime(bestB)}
+          betterA={num(bestA) < num(bestB)}
+          betterB={num(bestB) < num(bestA)}
+        />
         <Row
           label="Tyre"
           a={<TyrePill compound={a.compound} age={a.stintAge} size="sm" />}
@@ -170,6 +221,20 @@ export function DriverComparisonCard() {
             />
           )
         })}
+        {(bestsA || bestsB) &&
+          SPEED_MARKS.map(({ key, label }) => {
+            const d = speedDelta(key)
+            return (
+              <Row
+                key={key}
+                label={`${label} km/h Δ`}
+                a={d != null && d > 0 ? `+${d.toFixed(0)}` : ''}
+                b={d != null && d < 0 ? `+${(-d).toFixed(0)}` : ''}
+                betterA={d != null && d > 0}
+                betterB={d != null && d < 0}
+              />
+            )
+          })}
       </div>
     </WidgetFrame>
   )

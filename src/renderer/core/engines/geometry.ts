@@ -42,6 +42,25 @@ export function calculateBounds(points: Point[]): Bounds | null {
   return { minX, maxX, minY, maxY }
 }
 
+/**
+ * Smallest box containing both inputs (either may be absent).
+ *
+ * The track map frames itself on the union of the traced circuit and the cars
+ * currently on it, held across frames so the view never rescales as cars move.
+ * Recomputing the frame from whichever cars happen to be visible made the whole
+ * map breathe in and out every tick.
+ */
+export function unionBounds(a: Bounds | null, b: Bounds | null): Bounds | null {
+  if (!a) return b
+  if (!b) return a
+  return {
+    minX: Math.min(a.minX, b.minX),
+    maxX: Math.max(a.maxX, b.maxX),
+    minY: Math.min(a.minY, b.minY),
+    maxY: Math.max(a.maxY, b.maxY)
+  }
+}
+
 export interface NormalizationConfig {
   viewBoxWidth: number
   viewBoxHeight: number

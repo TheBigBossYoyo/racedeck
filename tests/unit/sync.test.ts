@@ -1,8 +1,10 @@
 import { describe, it, expect } from 'vitest'
 import {
+  bestCandidate,
   candidatesForDisplay,
   syncMath,
-  SessionSyncEngine
+  SessionSyncEngine,
+  type SyncCandidate
 } from '@renderer/core/engines/SessionSyncEngine'
 import type { RaceControlMessage } from '@shared/models'
 
@@ -178,5 +180,43 @@ describe('SessionSyncEngine', () => {
       severity: 'critical'
     }
     expect(e.buildCandidates([message], 0, 0, 'safety-car')).toEqual([])
+  })
+})
+
+describe('bestCandidate', () => {
+  const candidate = (id: string, distance: number): SyncCandidate => ({
+    id,
+    label: id,
+    dataSec: 100,
+    distance,
+    category: 'Flag'
+  })
+
+  it('takes a clear winner without asking', () => {
+    expect(bestCandidate([candidate('a', 12), candidate('b', 90)])?.id).toBe('a')
+  })
+
+  it('takes a lone match', () => {
+    expect(bestCandidate([candidate('a', 40)])?.id).toBe('a')
+  })
+
+  it('defers to the user when two events sit close together', () => {
+    // A yellow flag and its clearing seconds apart: picking one silently would
+    // mis-time the whole dashboard, and the user can see which they watched.
+    expect(bestCandidate([candidate('a', 10), candidate('b', 20)])).toBeNull()
+  })
+
+  it('rejects a match too far away to be what was just seen', () => {
+    expect(bestCandidate([candidate('a', 400), candidate('b', 900)])).toBeNull()
+  })
+
+  it('has nothing to say about an empty list', () => {
+    expect(bestCandidate([])).toBeNull()
+  })
+
+  it('still auto-applies before any calibration, when the delay itself is the gap', () => {
+    // Uncalibrated, the dashboard's "now" is the live edge, so the true event is
+    // a whole broadcast delay away. That must not disqualify it.
+    expect(bestCandidate([candidate('a', 55), candidate('b', 300)])?.id).toBe('a')
   })
 })

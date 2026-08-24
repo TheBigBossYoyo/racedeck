@@ -8,6 +8,7 @@ import { formatDuration } from '@renderer/lib/utils'
 import { cn } from '@renderer/lib/utils'
 import { phaseAt, phaseMeta, type SessionTimeline } from '@renderer/core/engines/SessionPhaseEngine'
 import { syncMath } from '@renderer/core/engines/SessionSyncEngine'
+import type { RaceBookmark, RaceBookmarkKind } from '@renderer/core/engines/RaceBookmarks'
 
 const SPEEDS = [
   { value: '0.5', label: '0.5×' },
@@ -20,6 +21,7 @@ const SPEEDS = [
 export function TransportBar({ showScrubber = true }: { showScrubber?: boolean }) {
   const { playing, togglePlay, clock, duration, seek, step, speed, setSpeed } = useSessionStore()
   const timeline = useSessionStore((s) => s.timeline)
+  const bookmarks = useSessionStore((s) => s.bookmarks)
   const currentLap = useSessionStore((s) => s.snapshot?.currentLap ?? null)
   const effectiveDataTime = useSessionStore((s) => s.effectiveDataTime)
   const offset = useSyncStore((s) => s.sync.offsetSeconds)
@@ -59,18 +61,19 @@ export function TransportBar({ showScrubber = true }: { showScrubber?: boolean }
           </span>
           <div className="relative flex min-w-0 flex-1 flex-col justify-center gap-1 overflow-hidden">
             <Slider
-               min={dataRange.min}
-               max={Math.max(dataRange.min, dataRange.max)}
+              min={dataRange.min}
+              max={Math.max(dataRange.min, dataRange.max)}
               step={0.5}
               value={[dataT]}
-               onValueChange={([v]) => seekDataTime(v)}
+              onValueChange={([v]) => seekDataTime(v)}
             />
             {timeline && duration > 0 && (
               <PhaseStrip
                 timeline={timeline}
                 duration={duration}
                 clock={dataT}
-                 onSeek={seekDataTime}
+                bookmarks={bookmarks}
+                onSeek={seekDataTime}
               />
             )}
           </div>
@@ -107,9 +110,9 @@ function PhaseChip({
   const meta = phaseMeta(phase.kind)
   // Prefer the live snapshot lap for green-flag racing (more precise than the
   // segment's boundary lap).
-  const lap = phase.kind !== 'pre' && phase.kind !== 'post' ? liveLap ?? phase.lap : null
+  const lap = phase.kind !== 'pre' && phase.kind !== 'post' ? (liveLap ?? phase.lap) : null
   const label =
-    lap != null && timeline.totalLaps && (phase.kind === 'green')
+    lap != null && timeline.totalLaps && phase.kind === 'green'
       ? `Lap ${lap}/${timeline.totalLaps}`
       : phase.label
   return (
@@ -123,16 +126,30 @@ function PhaseChip({
   )
 }
 
+const BOOKMARK_META: Record<RaceBookmarkKind, { color: string; ring?: boolean }> = {
+  start: { color: 'transparent' }, // drawn separately by the existing "Lights out" flag marker
+  'safety-car': { color: 'rgb(var(--warn))' },
+  vsc: { color: 'rgb(var(--warn))' },
+  'red-flag': { color: 'rgb(var(--danger))' },
+  'pit-stop': { color: 'rgb(var(--accent))' },
+  'lead-change': { color: 'rgb(var(--good))' },
+  penalty: { color: 'rgb(var(--danger))' },
+  radio: { color: 'rgb(var(--purple))' },
+  'fastest-lap': { color: 'rgb(var(--purple))', ring: true }
+}
+
 /** Thin colour strip under the scrubber marking pre-race / racing / SC / post. */
 function PhaseStrip({
   timeline,
   duration,
   clock,
+  bookmarks,
   onSeek
 }: {
   timeline: SessionTimeline
   duration: number
   clock: number
+  bookmarks: readonly RaceBookmark[]
   onSeek: (t: number) => void
 }) {
   const ref = useRef<HTMLDivElement>(null)
@@ -191,11 +208,30 @@ function PhaseStrip({
           <Flag className="h-2 w-2 text-white drop-shadow" />
         </div>
       )}
+      {/* Race-state bookmarks (APP_IMPROVEMENT_ROADMAP.md P1 item 13) — click
+          seeks data + TOD video together via the existing sync engine. */}
+      {bookmarks.map((bookmark, i) => {
+        if (bookmark.kind === 'start') return null // already drawn as the flag marker above
+        const meta = BOOKMARK_META[bookmark.kind]
+        return (
+          <button
+            key={`${bookmark.kind}-${i}`}
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation()
+              onSeek(bookmark.t)
+            }}
+            className={cn(
+              'absolute top-1/2 z-10 h-1.5 w-1.5 -translate-x-1/2 -translate-y-1/2 rounded-full ring-1 ring-black/40 transition-transform hover:scale-150',
+              meta.ring && 'ring-2 ring-white/60'
+            )}
+            style={{ left: pct(bookmark.t), backgroundColor: meta.color }}
+            title={`${bookmark.label} — click to jump`}
+          />
+        )
+      })}
       {/* Playhead */}
-      <div
-        className="absolute top-0 z-10 h-full w-px bg-white/90"
-        style={{ left: pct(clock) }}
-      />
+      <div className="absolute top-0 z-10 h-full w-px bg-white/90" style={{ left: pct(clock) }} />
     </div>
   )
 }

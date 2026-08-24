@@ -1,5 +1,6 @@
 import { memo, lazy, Suspense, type ComponentType } from 'react'
 import type { WidgetKey } from '@renderer/core/engines/LayoutManager'
+import { DiagnosticProfiler } from '@renderer/lib/renderDiagnostics'
 import { TodVideoPanel } from '@renderer/widgets/TodVideoPanel'
 import { TimingTower } from '@renderer/widgets/TimingTower'
 import { TrackMap } from '@renderer/widgets/TrackMap'
@@ -37,10 +38,14 @@ const QualifyingMonitorWidget = lazyWidget(() =>
   import('@renderer/widgets/QualifyingMonitor').then((m) => ({ default: m.QualifyingMonitor }))
 )
 const DriverComparisonWidget = lazyWidget(() =>
-  import('@renderer/widgets/DriverComparisonCard').then((m) => ({ default: m.DriverComparisonCard }))
+  import('@renderer/widgets/DriverComparisonCard').then((m) => ({
+    default: m.DriverComparisonCard
+  }))
 )
 const StrategyInsightsWidget = lazyWidget(() =>
-  import('@renderer/widgets/StrategyInsightsPanel').then((m) => ({ default: m.StrategyInsightsPanel }))
+  import('@renderer/widgets/StrategyInsightsPanel').then((m) => ({
+    default: m.StrategyInsightsPanel
+  }))
 )
 const PitStopPredictorWidget = lazyWidget(() =>
   import('@renderer/widgets/PitStopPredictor').then((m) => ({ default: m.PitStopPredictor }))
@@ -61,7 +66,9 @@ const TeamPaceWidget = lazyWidget(() =>
   import('@renderer/widgets/TeamPacePanel').then((m) => ({ default: m.TeamPacePanel }))
 )
 const TyrePerformanceWidget = lazyWidget(() =>
-  import('@renderer/widgets/TyrePerformancePanel').then((m) => ({ default: m.TyrePerformancePanel }))
+  import('@renderer/widgets/TyrePerformancePanel').then((m) => ({
+    default: m.TyrePerformancePanel
+  }))
 )
 const WinProbabilityWidget = lazyWidget(() =>
   import('@renderer/widgets/WinProbabilityPanel').then((m) => ({ default: m.WinProbabilityPanel }))
@@ -76,10 +83,14 @@ const PracticeRunWidget = lazyWidget(() =>
   import('@renderer/widgets/PracticeRunBoard').then((m) => ({ default: m.PracticeRunBoard }))
 )
 const PracticeIntelligenceWidget = lazyWidget(() =>
-  import('@renderer/widgets/PracticeIntelligencePanel').then((m) => ({ default: m.PracticeIntelligencePanel }))
+  import('@renderer/widgets/PracticeIntelligencePanel').then((m) => ({
+    default: m.PracticeIntelligencePanel
+  }))
 )
 const WeekendUpgradesWidget = lazyWidget(() =>
-  import('@renderer/widgets/WeekendUpgradesPanel').then((m) => ({ default: m.WeekendUpgradesPanel }))
+  import('@renderer/widgets/WeekendUpgradesPanel').then((m) => ({
+    default: m.WeekendUpgradesPanel
+  }))
 )
 const GapChartWidget = lazyWidget(() =>
   import('@renderer/widgets/GapChart').then((m) => ({ default: m.GapChart }))
@@ -137,5 +148,9 @@ export const WidgetRenderer = memo(function WidgetRenderer({
   widgetKey: WidgetKey
 }) {
   const Component = REGISTRY[widgetKey]
-  return <Component />
+  return (
+    <DiagnosticProfiler id={widgetKey}>
+      <Component />
+    </DiagnosticProfiler>
+  )
 })

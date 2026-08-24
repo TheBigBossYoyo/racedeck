@@ -9,7 +9,15 @@ import { TYRE_LABELS } from '@shared/constants'
 import { useTyreColors } from '@renderer/lib/useTyreColors'
 import { cn } from '@renderer/lib/utils'
 
-function PlanTimeline({ plan, currentLap, totalLaps }: { plan: StrategyPlan; currentLap: number; totalLaps: number }) {
+function PlanTimeline({
+  plan,
+  currentLap,
+  totalLaps
+}: {
+  plan: StrategyPlan
+  currentLap: number
+  totalLaps: number
+}) {
   const remaining = Math.max(1, totalLaps - currentLap)
   const tyreColors = useTyreColors()
   return (
@@ -25,7 +33,10 @@ function PlanTimeline({ plan, currentLap, totalLaps }: { plan: StrategyPlan; cur
               style={{ width: `${pct}%`, backgroundColor: `${color}2e` }}
               title={`${seg.compound} · laps ${seg.startLap}-${seg.startLap + seg.laps - 1} (${seg.laps} laps)`}
             >
-              <span className="absolute inset-x-0 top-0 h-1" style={{ backgroundColor: color, opacity: 0.9 }} />
+              <span
+                className="absolute inset-x-0 top-0 h-1"
+                style={{ backgroundColor: color, opacity: 0.9 }}
+              />
               {pct > 12 && (
                 <span className="text-[10px] font-bold" style={{ color }}>
                   {TYRE_LABELS[seg.compound]}
@@ -58,9 +69,15 @@ function PlanRow({ plan, best }: { plan: StrategyPlan; best?: boolean }) {
         ) : (
           <span className="tnum text-2xs font-bold text-fg-subtle">{plan.stops}⏱</span>
         )}
-        <span className={cn('text-xs font-semibold', best ? 'text-fg' : 'text-fg-muted')}>{plan.label}</span>
+        <span className={cn('text-xs font-semibold', best ? 'text-fg' : 'text-fg-muted')}>
+          {plan.label}
+        </span>
         <span className="ml-auto tnum text-xs font-semibold">
-          {best ? <span className="text-good">optimal</span> : <span className="text-fg-muted">+{plan.deltaSec.toFixed(1)}s</span>}
+          {best ? (
+            <span className="text-good">optimal</span>
+          ) : (
+            <span className="text-fg-muted">+{plan.deltaSec.toFixed(1)}s</span>
+          )}
         </span>
       </div>
     </div>
@@ -83,7 +100,11 @@ export function StintPlanner() {
   if (!snapshot) {
     return (
       <WidgetFrame title="Stint Planner" icon={<Route />}>
-        <EmptyState icon={<Route />} title="No session loaded" hint="Load a race to plan the remaining stints." />
+        <EmptyState
+          icon={<Route />}
+          title="No session loaded"
+          hint="Load a race to plan the remaining stints."
+        />
       </WidgetFrame>
     )
   }
@@ -104,7 +125,8 @@ export function StintPlanner() {
               <span className="text-sm font-semibold">Building the pit window</span>
             </div>
             <p className="mt-2 text-[11px] leading-relaxed text-fg-muted">
-              {plan?.reason} RaceDeck waits for a meaningful stint sample instead of forcing a speculative early stop.
+              {plan?.reason} RaceDeck waits for a meaningful stint sample instead of forcing a
+              speculative early stop.
             </p>
             <div className="mt-3 flex items-center gap-2 text-2xs text-fg-subtle">
               <Badge tone="neutral">LOW EVIDENCE</Badge>
@@ -129,7 +151,22 @@ export function StintPlanner() {
             <span className="ml-auto">used: {plan.usedCompounds.join(' · ') || '—'}</span>
           </div>
           <div className="flex items-center justify-between rounded-md border border-hairline/20 bg-black/15 px-2 py-1 text-2xs">
-            <span className="text-fg-muted">{plan.ruleLabel}</span>
+            <span className="flex items-center gap-1.5 text-fg-muted">
+              {plan.ruleLabel}
+              {plan.stopConfidence && (
+                <span
+                  title={
+                    plan.stopConfidence === 'high'
+                      ? 'Stop count read directly from the timing feed'
+                      : 'Stop count inferred from visible stint changes — may miss an unclassified early stop'
+                  }
+                >
+                  <Badge tone={plan.stopConfidence === 'high' ? 'good' : 'warn'}>
+                    {plan.stopConfidence}
+                  </Badge>
+                </span>
+              )}
+            </span>
             <span className="font-semibold text-fg">
               {plan.minimumRemainingStops > 0
                 ? `${plan.minimumRemainingStops} stop${plan.minimumRemainingStops === 1 ? '' : 's'} still required`
@@ -144,10 +181,16 @@ export function StintPlanner() {
             </div>
             <PlanRow plan={plan.recommended} best />
             {snapshot.totalLaps && snapshot.currentLap && (
-              <PlanTimeline plan={plan.recommended} currentLap={snapshot.currentLap} totalLaps={snapshot.totalLaps} />
+              <PlanTimeline
+                plan={plan.recommended}
+                currentLap={snapshot.currentLap}
+                totalLaps={snapshot.totalLaps}
+              />
             )}
             {!plan.recommended.usesTwoCompounds && (
-              <p className="mt-1 text-2xs text-warn">Note: does not yet satisfy the two-compound rule.</p>
+              <p className="mt-1 text-2xs text-warn">
+                Note: does not yet satisfy the two-compound rule.
+              </p>
             )}
           </div>
 

@@ -5,10 +5,13 @@ import { Badge, EmptyState, TyrePill, TeamStripe } from '@renderer/components/ui
 import { ErsBar } from '@renderer/components/ui/ErsGauge'
 import { useSessionStore } from '@renderer/store/sessionStore'
 import { useSettingsStore } from '@renderer/store/settingsStore'
-import { formatGap, formatLapTime, cn } from '@renderer/lib/utils'
+import { formatGap, formatLapTime, formatStaleness, cn } from '@renderer/lib/utils'
 import { pickDriver } from '@renderer/lib/useFocusDriver'
 import { sectorDisplayState, type SectorDisplayState } from '@renderer/core/providers/f1normalize'
 import type { TimingEntry } from '@shared/models'
+
+/** TimingData is a lower-rate feed than Position/CarData; a longer quiet spell means it stopped. */
+const TIMING_STALE_MS = 15_000
 
 const SECTOR_CLS: Record<SectorDisplayState, string> = {
   none: 'bg-fg-subtle/25',
@@ -27,7 +30,10 @@ function SectorTriad({ e }: { e: TimingEntry }) {
       {s.map((sec, i) => (
         <span
           key={i}
-          className={cn('h-1.5 w-3 rounded-sm transition-colors', SECTOR_CLS[sectorDisplayState(sec)])}
+          className={cn(
+            'h-1.5 w-3 rounded-sm transition-colors',
+            SECTOR_CLS[sectorDisplayState(sec)]
+          )}
           title={`S${i + 1} ${sec.seconds ? sec.seconds.toFixed(3) : '—'}`}
         />
       ))}
@@ -68,7 +74,11 @@ export function TimingTower() {
   return (
     <WidgetFrame
       title="Timing Tower"
-      subtitle={scope === 'all' ? `${snapshot.timing.length} cars` : `${visibleTiming.length} of ${snapshot.timing.length}`}
+      subtitle={
+        scope === 'all'
+          ? `${snapshot.timing.length} cars`
+          : `${visibleTiming.length} of ${snapshot.timing.length}`
+      }
       noPadding
       accent
     >
@@ -76,11 +86,24 @@ export function TimingTower() {
         <div className="sticky top-0 z-10 flex items-center justify-between gap-1.5 border-b border-hairline/20 bg-bg-raised/95 px-2 py-1 backdrop-blur-xl">
           {snapshot.currentLap != null ? (
             <Badge tone="neutral" className="tnum whitespace-nowrap">
-              L{snapshot.currentLap}{snapshot.totalLaps ? `/${snapshot.totalLaps}` : ''}
+              L{snapshot.currentLap}
+              {snapshot.totalLaps ? `/${snapshot.totalLaps}` : ''}
             </Badge>
           ) : (
             <span className="text-2xs text-fg-subtle">Session</span>
           )}
+          {(() => {
+            const stale = formatStaleness(snapshot.feedFreshness?.TimingData, TIMING_STALE_MS)
+            return (
+              stale && (
+                <span title="Timing feed has stopped delivering new data">
+                  <Badge tone="danger" className="whitespace-nowrap">
+                    {stale}
+                  </Badge>
+                </span>
+              )
+            )
+          })()}
           <span
             className="hidden text-[9px] font-semibold uppercase tracking-wide text-fg-subtle min-[1500px]:inline"
             title="Battery estimate and current Harvest / Deploy / Boost / Overtake mode"
@@ -120,84 +143,85 @@ export function TimingTower() {
               )}
               style={{ contentVisibility: 'auto', containIntrinsicSize: '40px' }}
             >
-              {e.isFastestLap && (
-                <span className="absolute inset-y-0 left-0 w-[2px] bg-purple" />
-              )}
+              {e.isFastestLap && <span className="absolute inset-y-0 left-0 w-[2px] bg-purple" />}
               <button
                 onClick={() => pickDriver(e.driverNumber)}
                 aria-label={`Focus ${d?.code ?? e.driverNumber}`}
                 className="flex min-w-0 flex-1 items-center gap-2 text-left"
               >
-              {/* Position */}
-              <span
-                className={cn(
-                  'tnum grid h-6 w-6 shrink-0 place-items-center rounded-md text-xs font-bold',
-                  e.position === 1
-                    ? 'bg-accent/20 text-accent'
-                    : 'bg-white/5 text-fg-muted'
-                )}
-              >
-                {e.position ?? '—'}
-              </span>
-              <TeamStripe color={d?.color ?? null} />
-
-              {/* Driver + tyre + last */}
-              <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-                <div className="flex items-center gap-1.5">
-                  <span className="text-[13px] font-bold tracking-wide text-fg">
-                    {d?.code ?? e.driverNumber}
-                  </span>
-                  {e.isFastestLap && (
-                    <span className="rounded bg-purple/15 px-1 text-[9px] font-bold text-purple ring-1 ring-purple/30">
-                      FL
-                    </span>
-                  )}
-                  {e.inPit && (
-                    <span className="rounded bg-warn/20 px-1 text-[9px] font-bold uppercase text-warn">
-                      Pit
-                    </span>
-                  )}
-                  {dim && (
-                    <span className="rounded bg-danger/20 px-1 text-[9px] font-bold uppercase text-danger">
-                      Out
-                    </span>
-                  )}
-                  {e.penalty && (
-                    <span className="rounded bg-danger/20 px-1 text-[9px] font-bold text-danger">
-                      {/^\d+s$/.test(e.penalty) ? `+${e.penalty}` : e.penalty}
-                    </span>
-                  )}
-                  {e.underInvestigation && (
-                    <TriangleAlert className="h-3 w-3 text-warn" />
-                  )}
-                </div>
-                <div className="flex items-center gap-1.5">
-                  <TyrePill compound={e.compound} age={e.stintAge} size="sm" />
-                  <span className="tnum mono text-2xs text-fg-muted">
-                    {formatLapTime(e.lastLap)}
-                  </span>
-                </div>
-              </div>
-
-              {/* Gap + interval */}
-              <div className="flex shrink-0 flex-col items-end gap-0.5">
+                {/* Position */}
                 <span
                   className={cn(
-                    'tnum mono text-xs font-medium',
-                    e.position === 1 ? 'text-accent' : 'text-fg'
+                    'tnum grid h-6 w-6 shrink-0 place-items-center rounded-md text-xs font-bold',
+                    e.position === 1 ? 'bg-accent/20 text-accent' : 'bg-white/5 text-fg-muted'
                   )}
                 >
-                  {e.position === 1 ? 'LEADER' : formatGap(e.gapToLeader)}
+                  {e.position ?? '—'}
                 </span>
-                <span className="tnum mono text-[10px] text-fg-subtle">
-                  {e.position === 1 ? formatLapTime(e.bestLap) : formatGap(e.intervalAhead)}
-                </span>
-              </div>
+                <TeamStripe color={d?.color ?? null} />
 
-              <div className="flex shrink-0 flex-col items-end gap-1">
-                <SectorTriad e={e} />
-                <ErsBar pct={e.energyPct} mode={e.deployMode} estimate={e.energyIsEstimate} />
-              </div>
+                {/* Driver + tyre + last */}
+                <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-[13px] font-bold tracking-wide text-fg">
+                      {d?.code ?? e.driverNumber}
+                    </span>
+                    {e.isFastestLap && (
+                      <span className="rounded bg-purple/15 px-1 text-[9px] font-bold text-purple ring-1 ring-purple/30">
+                        FL
+                      </span>
+                    )}
+                    {e.inPit && (
+                      <span className="rounded bg-warn/20 px-1 text-[9px] font-bold uppercase text-warn">
+                        Pit
+                      </span>
+                    )}
+                    {dim && (
+                      <span className="rounded bg-danger/20 px-1 text-[9px] font-bold uppercase text-danger">
+                        Out
+                      </span>
+                    )}
+                    {e.penalty && (
+                      <span className="rounded bg-danger/20 px-1 text-[9px] font-bold text-danger">
+                        {/^\d+s$/.test(e.penalty) ? `+${e.penalty}` : e.penalty}
+                      </span>
+                    )}
+                    {e.underInvestigation && <TriangleAlert className="h-3 w-3 text-warn" />}
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <TyrePill compound={e.compound} age={e.stintAge} size="sm" />
+                    <span className="tnum mono text-2xs text-fg-muted">
+                      {formatLapTime(e.lastLap)}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Gap + interval */}
+                <div className="flex shrink-0 flex-col items-end gap-0.5">
+                  <span
+                    className={cn(
+                      'tnum mono text-xs font-medium',
+                      e.position === 1 ? 'text-accent' : 'text-fg'
+                    )}
+                  >
+                    {e.position === 1 ? 'LEADER' : formatGap(e.gapToLeader)}
+                  </span>
+                  <span className="tnum mono text-[10px] text-fg-subtle">
+                    {e.position === 1 ? formatLapTime(e.bestLap) : formatGap(e.intervalAhead)}
+                  </span>
+                </div>
+
+                <div className="flex shrink-0 flex-col items-end gap-1">
+                  <SectorTriad e={e} />
+                  <ErsBar
+                    pct={e.energyPct}
+                    mode={e.deployMode}
+                    estimate={e.energyIsEstimate}
+                    confidence={e.energyConfidence}
+                    deploymentLimited={e.energyDeploymentLimited}
+                    staleMs={snapshot.feedFreshness?.CarData}
+                  />
+                </div>
               </button>
 
               {/* Favorite star (appears on hover / when set) */}

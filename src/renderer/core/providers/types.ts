@@ -14,7 +14,8 @@ import type {
   DriverSessionBests,
   PitLaneTime,
   TeamRadioClip,
-  CurrentTyre
+  CurrentTyre,
+  DriverTyreStintHistory
 } from '@shared/models'
 import type { SessionTimeline } from '@renderer/core/engines/SessionPhaseEngine'
 import type { SessionClockRemaining } from '@shared/f1live'
@@ -64,6 +65,15 @@ export interface RaceSnapshot {
   teamRadio?: TeamRadioClip[]
   /** F1's direct statement of the tyre set fitted right now, per driver. */
   currentTyres?: CurrentTyre[]
+  /** F1's own per-driver tyre-set stint history (`TyreStintSeries`), when available. */
+  tyreStintHistory?: DriverTyreStintHistory[]
+  /**
+   * Milliseconds since each raw feed topic (e.g. `Position`, `CarData`,
+   * `TimingData`) last received new data. Wall-clock, so only meaningful for a
+   * LIVE session — a replay's clock is the scrub position, not real time, so
+   * there is nothing to be "stale" against. Absent/omitted outside live.
+   */
+  feedFreshness?: Record<string, number>
   /** Latest short race-control ticker line, e.g. "CLEAR IN TRACK SECTOR 12". */
   trackMessage?: string | null
   availability: DataAvailabilityMap

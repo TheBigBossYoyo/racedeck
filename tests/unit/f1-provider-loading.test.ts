@@ -34,19 +34,107 @@ import { DataProviderManager } from '@renderer/core/DataProviderManager'
 
 const archive: F1SessionData = {
   summary: {
-    path: '2026/Test_Grand_Prix/2026-01-01_Race/', key: 1, year: 2026,
-    meetingName: 'Test Grand Prix', meetingOfficialName: null, name: 'Race', type: 'Race',
-    number: 1, circuitShortName: 'Test', countryName: 'Test', countryCode: 'TST', location: 'Test',
-    startDate: null, endDate: null, gmtOffset: '+00:00:00', archiveStatus: 'Complete'
+    path: '2026/Test_Grand_Prix/2026-01-01_Race/',
+    key: 1,
+    year: 2026,
+    meetingName: 'Test Grand Prix',
+    meetingOfficialName: null,
+    name: 'Race',
+    type: 'Race',
+    number: 1,
+    circuitShortName: 'Test',
+    countryName: 'Test',
+    countryCode: 'TST',
+    location: 'Test',
+    startDate: null,
+    endDate: null,
+    gmtOffset: '+00:00:00',
+    archiveStatus: 'Complete'
   },
   sessionInfo: {},
   streams: { DriverList: [], TimingData: [], TimingAppData: [] },
   duration: 10
 }
 
+function archiveSession(path: string, streams: Partial<F1SessionData['streams']>): F1SessionData {
+  return {
+    ...archive,
+    summary: {
+      ...archive.summary,
+      path,
+      key: path,
+      meetingName: path.split('/')[1] ?? archive.summary.meetingName,
+      circuitShortName: path.split('/')[1] ?? archive.summary.circuitShortName
+    },
+    streams: {
+      ...archive.streams,
+      ...streams
+    }
+  }
+}
+
+function completedLapPoint(lapNumber: number): F1SessionData['streams']['TimingData'][number] {
+  return {
+    t: lapNumber * 10,
+    d: {
+      Lines: {
+        '1': {
+          Position: '1',
+          NumberOfLaps: lapNumber,
+          LastLapTime: { Value: '1:30.000' }
+        }
+      }
+    }
+  }
+}
+
+function driverListPoint(): F1SessionData['streams']['DriverList'][number] {
+  return { t: 0, d: { '1': { RacingNumber: '1', Tla: 'TST' } } }
+}
+
+function positionPoint(
+  t: number,
+  x: number,
+  y: number
+): F1SessionData['streams']['Position'][number] {
+  return {
+    t,
+    d: {
+      Position: {
+        '0': {
+          Entries: {
+            '1': { X: x, Y: y, Z: 12 }
+          }
+        }
+      }
+    }
+  }
+}
+
+function closedLapPositionPoints(
+  startT: number,
+  steps = 61
+): NonNullable<F1SessionData['streams']['Position']> {
+  return Array.from({ length: steps }, (_, index) => {
+    const angle = (2 * Math.PI * index) / (steps - 1)
+    return positionPoint(startT + index, 6_000 * Math.cos(angle), 6_000 * Math.sin(angle))
+  })
+}
+
+function exactClosedCachedPath(): { x: number; y: number }[] {
+  const path = Array.from({ length: 40 }, (_, index) => ({ x: index * 10, y: index }))
+  return [...path, path[0]]
+}
+
+function legacyOpenCachedPath(): { x: number; y: number }[] {
+  return Array.from({ length: 40 }, (_, index) => ({ x: index * 10, y: index }))
+}
+
 function deferred<T>() {
   let resolve!: (value: T) => void
-  const promise = new Promise<T>((done) => { resolve = done })
+  const promise = new Promise<T>((done) => {
+    resolve = done
+  })
   return { promise, resolve }
 }
 
@@ -65,8 +153,12 @@ describe('F1 provider session boundaries', () => {
   beforeEach(() => {
     ipc.loadSession.mockReset().mockResolvedValue(archive)
     ipc.loadSessionEnrichment.mockReset().mockResolvedValue({
-      carData: [], position: [], duration: 10,
-      nextCarDataOffset: 0, nextPositionOffset: 0, done: true
+      carData: [],
+      position: [],
+      duration: 10,
+      nextCarDataOffset: 0,
+      nextPositionOffset: 0,
+      done: true
     })
     ipc.getLive.mockReset()
     storeMem.clear()
@@ -95,9 +187,7 @@ describe('F1 provider session boundaries', () => {
 
   it('replaces stale live state when the socket generation changes', async () => {
     const provider = new F1LiveProvider()
-    ipc.getLive
-      .mockResolvedValueOnce(liveDelta(1, 10))
-      .mockResolvedValueOnce(liveDelta(2, 4))
+    ipc.getLive.mockResolvedValueOnce(liveDelta(1, 10)).mockResolvedValueOnce(liveDelta(2, 4))
 
     await provider.loadSession('live')
     await provider.loadSession('live')
@@ -128,15 +218,25 @@ describe('F1 provider session boundaries', () => {
     const requested: string[] = []
     ipc.loadSessionEnrichment.mockImplementation((request: { feed: 'position' | 'carData' }) => {
       requested.push(request.feed)
-      return Promise.resolve(request.feed === 'position'
-        ? {
-            carData: [], position: [{ t: 2, d: { Position: [] } }], duration: 2,
-            nextCarDataOffset: 0, nextPositionOffset: 1, done: true
-          }
-        : {
-            carData: [{ t: 3, d: { Entries: [] } }], position: [], duration: 3,
-            nextCarDataOffset: 1, nextPositionOffset: 0, done: true
-          })
+      return Promise.resolve(
+        request.feed === 'position'
+          ? {
+              carData: [],
+              position: [{ t: 2, d: { Position: [] } }],
+              duration: 2,
+              nextCarDataOffset: 0,
+              nextPositionOffset: 1,
+              done: true
+            }
+          : {
+              carData: [{ t: 3, d: { Entries: [] } }],
+              position: [],
+              duration: 3,
+              nextCarDataOffset: 1,
+              nextPositionOffset: 0,
+              done: true
+            }
+      )
     })
     const provider = new F1LiveProvider()
     const states: Array<[number, number]> = []
@@ -144,7 +244,9 @@ describe('F1 provider session boundaries', () => {
       positionPoints: unknown[]
       carDataPoints: unknown[]
     }
-    provider.onUpdate(() => states.push([internal.positionPoints.length, internal.carDataPoints.length]))
+    provider.onUpdate(() =>
+      states.push([internal.positionPoints.length, internal.carDataPoints.length])
+    )
 
     await provider.loadSession(archive.summary.path)
     await vi.waitFor(() => expect(requested).toEqual(['position', 'carData']))
@@ -156,7 +258,9 @@ describe('F1 provider session boundaries', () => {
   it('processes only appended points on a continuing live poll', async () => {
     const lapPoint = (t: number, laps: number) => ({
       t,
-      d: { Lines: { '1': { Position: '1', NumberOfLaps: laps, LastLapTime: { Value: '1:30.000' } } } }
+      d: {
+        Lines: { '1': { Position: '1', NumberOfLaps: laps, LastLapTime: { Value: '1:30.000' } } }
+      }
     })
     const delta1: F1LiveDataDelta = {
       ...archive,
@@ -228,7 +332,9 @@ describe('F1 provider session boundaries', () => {
   it('streams and preprocesses a partial timing tail before the session is loaded', async () => {
     const lapPoint = (t: number, laps: number) => ({
       t,
-      d: { Lines: { '1': { Position: '1', NumberOfLaps: laps, LastLapTime: { Value: '1:31.000' } } } }
+      d: {
+        Lines: { '1': { Position: '1', NumberOfLaps: laps, LastLapTime: { Value: '1:31.000' } } }
+      }
     })
     ipc.loadSession.mockResolvedValue({
       ...archive,
@@ -243,13 +349,23 @@ describe('F1 provider session boundaries', () => {
     ipc.loadSessionEnrichment.mockImplementation((request: { feed: string }) => {
       if (request.feed === 'timing') {
         return Promise.resolve({
-          carData: [], position: [], timing: [lapPoint(15, 2)], duration: 15,
-          nextCarDataOffset: 0, nextPositionOffset: 0, nextTimingOffset: 2, done: true
+          carData: [],
+          position: [],
+          timing: [lapPoint(15, 2)],
+          duration: 15,
+          nextCarDataOffset: 0,
+          nextPositionOffset: 0,
+          nextTimingOffset: 2,
+          done: true
         })
       }
       return Promise.resolve({
-        carData: [], position: [], duration: 15,
-        nextCarDataOffset: 0, nextPositionOffset: 0, done: true
+        carData: [],
+        position: [],
+        duration: 15,
+        nextCarDataOffset: 0,
+        nextPositionOffset: 0,
+        done: true
       })
     })
     const provider = new F1LiveProvider()
@@ -271,32 +387,44 @@ describe('F1 provider session boundaries', () => {
           t: fromStep + index,
           d: {
             Position: {
-              '0': { Entries: { '1': { X: 6000 * Math.cos(angle), Y: 6000 * Math.sin(angle), Z: 0 } } }
+              '0': {
+                Entries: { '1': { X: 6000 * Math.cos(angle), Y: 6000 * Math.sin(angle), Z: 0 } }
+              }
             }
           }
         }
       })
     let tailRequested = false
     let carDataRequested = false
-    ipc.loadSessionEnrichment.mockImplementation((request: { feed: string; positionOffset: number }) => {
-      if (request.feed !== 'position') {
-        carDataRequested = true
-        return Promise.resolve({
-          carData: [], position: [], duration: 61,
-          nextCarDataOffset: 0, nextPositionOffset: 0, done: true
-        })
+    ipc.loadSessionEnrichment.mockImplementation(
+      (request: { feed: string; positionOffset: number }) => {
+        if (request.feed !== 'position') {
+          carDataRequested = true
+          return Promise.resolve({
+            carData: [],
+            position: [],
+            duration: 61,
+            nextCarDataOffset: 0,
+            nextPositionOffset: 0,
+            done: true
+          })
+        }
+        if (request.positionOffset === 0) {
+          return Promise.resolve({
+            carData: [],
+            position: lapChunk(0, 60),
+            duration: 60,
+            nextCarDataOffset: 0,
+            nextPositionOffset: 61,
+            done: false
+          })
+        }
+        // The tail of the feed never arrives in this test: the map must already
+        // be published from the closed-lap prefix alone.
+        tailRequested = true
+        return new Promise(() => {})
       }
-      if (request.positionOffset === 0) {
-        return Promise.resolve({
-          carData: [], position: lapChunk(0, 60), duration: 60,
-          nextCarDataOffset: 0, nextPositionOffset: 61, done: false
-        })
-      }
-      // The tail of the feed never arrives in this test: the map must already
-      // be published from the closed-lap prefix alone.
-      tailRequested = true
-      return new Promise(() => {})
-    })
+    )
     ipc.loadSession.mockResolvedValue({
       ...archive,
       duration: 61,
@@ -318,34 +446,44 @@ describe('F1 provider session boundaries', () => {
     // it must not wait for the whole Position download.
     await vi.waitFor(() => expect(carDataRequested).toBe(true))
     // Closing a lap persists the circuit outline under the meeting key.
-    await vi.waitFor(() =>
-      expect(storeMem.get('trackpaths:2026/Test_Grand_Prix')).toBeDefined()
-    )
+    await vi.waitFor(() => expect(storeMem.get('trackpaths:2026/Test_Grand_Prix')).toBeDefined())
     provider.cancelPendingLoads()
   })
 
   it('publishes the map from the first chunk when the weekend outline is cached', async () => {
     // A previously-proven outline for this meeting lives in the store.
-    const cachedPath = Array.from({ length: 40 }, (_, index) => ({ x: index * 10, y: index }))
+    const cachedPath = exactClosedCachedPath()
     storeMem.set('trackpaths:2026/Test_Grand_Prix', cachedPath)
 
     let positionChunks = 0
-    ipc.loadSessionEnrichment.mockImplementation((request: { feed: string; positionOffset: number }) => {
-      if (request.feed !== 'position') {
+    ipc.loadSessionEnrichment.mockImplementation(
+      (request: { feed: string; positionOffset: number }) => {
+        if (request.feed !== 'position') {
+          return Promise.resolve({
+            carData: [],
+            position: [],
+            duration: 5,
+            nextCarDataOffset: 0,
+            nextPositionOffset: 0,
+            done: true
+          })
+        }
+        positionChunks += 1
+        // A single short prefix — nowhere near a closed lap.
         return Promise.resolve({
-          carData: [], position: [], duration: 5,
-          nextCarDataOffset: 0, nextPositionOffset: 0, done: true
+          carData: [],
+          // A real coordinate: (0,0,0) is the feed's "car not on track" sentinel
+          // and is deliberately ignored.
+          position: [
+            { t: 1, d: { Position: { '0': { Entries: { '1': { X: 120, Y: 340, Z: 12 } } } } } }
+          ],
+          duration: 1,
+          nextCarDataOffset: 0,
+          nextPositionOffset: 1,
+          done: true
         })
       }
-      positionChunks += 1
-      // A single short prefix — nowhere near a closed lap.
-      return Promise.resolve({
-        carData: [],
-        position: [{ t: 1, d: { Position: { '0': { Entries: { '1': { X: 0, Y: 0, Z: 0 } } } } } }],
-        duration: 1,
-        nextCarDataOffset: 0, nextPositionOffset: 1, done: true
-      })
-    })
+    )
     ipc.loadSession.mockResolvedValue({
       ...archive,
       duration: 5,
@@ -368,20 +506,194 @@ describe('F1 provider session boundaries', () => {
     provider.cancelPendingLoads()
   })
 
-  it('stops applying enrichment chunks after the load is superseded', async () => {
-    ipc.loadSessionEnrichment.mockImplementation((request: { feed: string; positionOffset: number }) => {
-      if (request.feed !== 'position') {
+  it('rejects a legacy open cached outline until Position enrichment rebuilds an exact closure', async () => {
+    storeMem.set('trackpaths:2026/Test_Grand_Prix', legacyOpenCachedPath())
+
+    let positionChunks = 0
+    ipc.loadSessionEnrichment.mockImplementation(
+      (request: { feed: string; positionOffset: number }) => {
+        if (request.feed !== 'position') {
+          return Promise.resolve({
+            carData: [],
+            position: [],
+            duration: 5,
+            nextCarDataOffset: 0,
+            nextPositionOffset: 0,
+            done: true
+          })
+        }
+        positionChunks += 1
+        if (request.positionOffset === 0) {
+          return Promise.resolve({
+            carData: [],
+            position: [positionPoint(1, 120, 340)],
+            duration: 1,
+            nextCarDataOffset: 0,
+            nextPositionOffset: 1,
+            done: false
+          })
+        }
         return Promise.resolve({
-          carData: [], position: [], duration: 0,
-          nextCarDataOffset: 0, nextPositionOffset: 0, done: true
+          carData: [],
+          position: [],
+          duration: 1,
+          nextCarDataOffset: 0,
+          nextPositionOffset: request.positionOffset,
+          done: false
         })
       }
-      const offset = request.positionOffset
-      return Promise.resolve({
-        carData: [], position: [{ t: offset + 1, d: { Position: [] } }], duration: offset + 1,
-        nextCarDataOffset: 0, nextPositionOffset: offset + 1, done: false
-      })
+    )
+    ipc.loadSession.mockResolvedValue({
+      ...archive,
+      duration: 5,
+      streams: {
+        ...archive.streams,
+        DriverList: [driverListPoint()],
+        TimingData: [{ t: 0, d: { Lines: { '1': { Position: '1' } } } }]
+      }
     })
+    const provider = new F1LiveProvider()
+
+    await provider.loadSession(archive.summary.path)
+    await vi.waitFor(() => expect(positionChunks).toBeGreaterThan(0))
+
+    const snapshot = provider.getSnapshotAt(1)
+    expect(snapshot.trackPath).toEqual([])
+    expect(snapshot.positions[0]).toMatchObject({ driverNumber: 1, x: null, y: null, z: null })
+    expect(snapshot.availability.positions).toBe(false)
+    provider.cancelPendingLoads()
+  })
+
+  it('clears the prior session track outline at a fresh-session boundary', async () => {
+    const cachedPath = exactClosedCachedPath()
+    const nextSession = archiveSession('2026/Other_Grand_Prix/2026-01-02_Race/', {})
+    storeMem.set('trackpaths:2026/Test_Grand_Prix', cachedPath)
+    ipc.loadSession.mockResolvedValueOnce(archive).mockResolvedValueOnce(nextSession)
+    const provider = new F1LiveProvider()
+
+    await provider.loadSession(archive.summary.path)
+    expect(provider.getSnapshotAt(0).trackPath).toEqual(cachedPath)
+
+    await provider.loadSession(nextSession.summary.path)
+
+    expect(provider.getSnapshotAt(0).trackPath).toEqual([])
+  })
+
+  it('does not reuse stale pit-lap indexes across fresh sessions with equal-length pit feeds', async () => {
+    const sessionOne = archiveSession('2026/First_Grand_Prix/2026-01-03_Race/', {
+      DriverList: [driverListPoint()],
+      TimingData: [1, 2, 3, 4, 5].map(completedLapPoint),
+      PitLaneTimeCollection: [{ t: 15, d: { PitTimes: { '1': { Duration: 20, Lap: 1 } } } }]
+    })
+    const sessionTwo = archiveSession('2026/Second_Grand_Prix/2026-01-04_Race/', {
+      DriverList: [driverListPoint()],
+      TimingData: [1, 2, 3, 4, 5].map(completedLapPoint),
+      PitLaneTimeCollection: [{ t: 45, d: { PitTimes: { '1': { Duration: 20, Lap: 4 } } } }]
+    })
+    ipc.loadSession.mockResolvedValueOnce(sessionOne).mockResolvedValueOnce(sessionTwo)
+    const provider = new F1LiveProvider()
+
+    await provider.loadSession(sessionOne.summary.path)
+    const firstLaps = provider.getDriverLaps(1)
+    expect(firstLaps.find((lap) => lap.lapNumber === 1)?.isPitInLap).toBe(true)
+    expect(firstLaps.find((lap) => lap.lapNumber === 2)?.isPitOutLap).toBe(true)
+
+    await provider.loadSession(sessionTwo.summary.path)
+    const secondLaps = provider.getDriverLaps(1)
+
+    expect(secondLaps.find((lap) => lap.lapNumber === 1)?.isPitInLap).toBe(false)
+    expect(secondLaps.find((lap) => lap.lapNumber === 2)?.isPitOutLap).toBe(false)
+    expect(secondLaps.find((lap) => lap.lapNumber === 4)?.isPitInLap).toBe(true)
+    expect(secondLaps.find((lap) => lap.lapNumber === 5)?.isPitOutLap).toBe(true)
+  })
+
+  it('keeps partial live Position coordinates hidden until an outline publication gate opens', async () => {
+    ipc.getLive.mockResolvedValueOnce({
+      ...archive,
+      summary: {
+        ...archive.summary,
+        path: 'live',
+        feedPath: archive.summary.path,
+        liveStreamActive: true,
+        archiveStatus: 'Generating'
+      },
+      streams: {
+        ...archive.streams,
+        DriverList: [driverListPoint()],
+        TimingData: [{ t: 1, d: { Lines: { '1': { Position: '1' } } } }],
+        Position: [positionPoint(1, 120, 340)]
+      },
+      duration: 1,
+      cursors: { TimingData: 1, Position: 1 },
+      generation: 1
+    })
+    const provider = new F1LiveProvider()
+
+    await provider.loadSession('live')
+
+    const snapshot = provider.getSnapshotAt(1)
+    expect(snapshot.trackPath).toEqual([])
+    expect(snapshot.positions[0]).toMatchObject({ driverNumber: 1, x: null, y: null, z: null })
+    expect(snapshot.availability.positions).toBe(false)
+  })
+
+  it('keeps the complete-archive open fallback for inline Position data', async () => {
+    const inlineArchive = archiveSession(archive.summary.path, {
+      DriverList: [driverListPoint()],
+      TimingData: [{ t: 1, d: { Lines: { '1': { Position: '1' } } } }],
+      Position: [positionPoint(1, 120, 340)]
+    })
+    ipc.loadSession.mockResolvedValueOnce(inlineArchive)
+    const provider = new F1LiveProvider()
+
+    await provider.loadSession(inlineArchive.summary.path)
+
+    const snapshot = provider.getSnapshotAt(1)
+    expect(snapshot.positions[0]).toMatchObject({ driverNumber: 1, x: 120, y: 340, z: 12 })
+    expect(snapshot.availability.positions).toBe(true)
+  })
+
+  it('keeps session-level map availability before the first Position timestamp once the outline is published', async () => {
+    const publishedOutlineArchive = archiveSession('2026/Outline_Grand_Prix/2026-01-05_Race/', {
+      DriverList: [driverListPoint()],
+      TimingData: [{ t: 9, d: { Lines: { '1': { Position: '1' } } } }],
+      Position: closedLapPositionPoints(144)
+    })
+    ipc.loadSession.mockResolvedValueOnce(publishedOutlineArchive)
+    const provider = new F1LiveProvider()
+
+    await provider.loadSession(publishedOutlineArchive.summary.path)
+
+    const snapshot = provider.getSnapshotAt(9)
+    expect(snapshot.trackPath.length).toBeGreaterThan(50)
+    expect(snapshot.positions[0]).toMatchObject({ driverNumber: 1, x: null, y: null, z: null })
+    expect(snapshot.availability.positions).toBe(true)
+  })
+
+  it('stops applying enrichment chunks after the load is superseded', async () => {
+    ipc.loadSessionEnrichment.mockImplementation(
+      (request: { feed: string; positionOffset: number }) => {
+        if (request.feed !== 'position') {
+          return Promise.resolve({
+            carData: [],
+            position: [],
+            duration: 0,
+            nextCarDataOffset: 0,
+            nextPositionOffset: 0,
+            done: true
+          })
+        }
+        const offset = request.positionOffset
+        return Promise.resolve({
+          carData: [],
+          position: [{ t: offset + 1, d: { Position: [] } }],
+          duration: offset + 1,
+          nextCarDataOffset: 0,
+          nextPositionOffset: offset + 1,
+          done: false
+        })
+      }
+    )
     const provider = new F1LiveProvider()
     const internal = provider as unknown as { positionPoints: unknown[] }
 
@@ -430,5 +742,200 @@ describe('F1 provider session boundaries', () => {
     manager.setActive('f1live')
 
     expect(cancel).toHaveBeenCalledOnce()
+  })
+})
+
+// APP_IMPROVEMENT_ROADMAP.md P0 item 5: stale-feed detection. Wall-clock, so
+// only meaningful for a LIVE session; fake timers give deterministic elapsed
+// time between polls without a real setTimeout.
+describe('F1 provider stale-feed detection', () => {
+  beforeEach(() => {
+    ipc.loadSession.mockReset().mockResolvedValue(archive)
+    ipc.loadSessionEnrichment.mockReset().mockResolvedValue({
+      carData: [],
+      position: [],
+      duration: 10,
+      nextCarDataOffset: 0,
+      nextPositionOffset: 0,
+      done: true
+    })
+    ipc.getLive.mockReset()
+    storeMem.clear()
+    vi.useFakeTimers()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('reports near-zero freshness for a topic that just received data on a live session', async () => {
+    ipc.getLive.mockResolvedValueOnce(liveDelta(1, 10))
+    const provider = new F1LiveProvider()
+
+    await provider.loadSession('live')
+    const snapshot = provider.getSnapshotAt(provider.getDuration())
+
+    expect(snapshot.feedFreshness?.TimingData).toBe(0)
+  })
+
+  it("grows a topic's reported staleness as wall-clock time passes without new data", async () => {
+    ipc.getLive.mockResolvedValueOnce(liveDelta(1, 10))
+    const provider = new F1LiveProvider()
+
+    await provider.loadSession('live')
+    vi.advanceTimersByTime(6_000)
+    const snapshot = provider.getSnapshotAt(provider.getDuration())
+
+    expect(snapshot.feedFreshness?.TimingData).toBe(6_000)
+  })
+
+  it('only resets freshness for topics that actually received new points on a continuing poll', async () => {
+    const delta1: F1LiveDataDelta = {
+      ...archive,
+      summary: { ...archive.summary, path: 'live', liveStreamActive: true },
+      streams: {
+        DriverList: [{ t: 0, d: {} }],
+        TimingData: [{ t: 10, d: { Lines: {} } }],
+        Position: [{ t: 10, d: { Position: [] } }]
+      },
+      duration: 10,
+      cursors: { TimingData: 1, Position: 1 },
+      generation: 1
+    }
+    // Second poll only advances TimingData; Position stays put.
+    const delta2: F1LiveDataDelta = {
+      ...delta1,
+      streams: { TimingData: [{ t: 20, d: { Lines: {} } }] },
+      duration: 20,
+      cursors: { TimingData: 2, Position: 1 }
+    }
+    ipc.getLive.mockResolvedValueOnce(delta1).mockResolvedValueOnce(delta2)
+    const provider = new F1LiveProvider()
+
+    await provider.loadSession('live')
+    vi.advanceTimersByTime(4_000)
+    await provider.loadSession('live')
+
+    const snapshot = provider.getSnapshotAt(provider.getDuration())
+    expect(snapshot.feedFreshness?.TimingData).toBe(0)
+    expect(snapshot.feedFreshness?.Position).toBe(4_000)
+  })
+
+  it('omits feed freshness entirely for a replay/archive session', async () => {
+    const provider = new F1LiveProvider()
+
+    await provider.loadSession(archive.summary.path)
+    const snapshot = provider.getSnapshotAt(0)
+
+    expect(snapshot.feedFreshness).toBeUndefined()
+  })
+
+  it('clears stale live freshness state when switching to a replay session', async () => {
+    ipc.getLive.mockResolvedValueOnce(liveDelta(1, 10))
+    const provider = new F1LiveProvider()
+    await provider.loadSession('live')
+
+    await provider.loadSession(archive.summary.path)
+
+    const internal = provider as unknown as { feedLastWallClockMs: Record<string, number> }
+    expect(internal.feedLastWallClockMs).toEqual({})
+  })
+})
+
+describe('F1 provider live track outline', () => {
+  /** A live delta whose Position stream traces `steps` of a circle of `radius`. */
+  function liveWithArc(
+    generation: number,
+    steps: number,
+    radius = 5_000,
+    ofSteps = 60
+  ): F1LiveDataDelta {
+    const position = Array.from({ length: steps }, (_, i) => {
+      const angle = (2 * Math.PI * i) / ofSteps
+      return {
+        t: i,
+        d: {
+          Position: {
+            '0': {
+              Entries: {
+                '1': { Status: 'OnTrack', X: radius * Math.cos(angle), Y: radius * Math.sin(angle) }
+              }
+            }
+          }
+        }
+      }
+    })
+    return {
+      ...archive,
+      summary: {
+        ...archive.summary,
+        path: 'live',
+        feedPath: '2026/Test_Grand_Prix/2026-01-01_Race/',
+        liveStreamActive: true
+      },
+      streams: {
+        ...archive.streams,
+        DriverList: [{ t: 0, d: { '1': { RacingNumber: '1', Tla: 'TST' } } }],
+        TimingData: [{ t: 0, d: { Lines: { '1': { Position: '1' } } } }],
+        Position: position
+      },
+      duration: steps,
+      cursors: { Position: position.length },
+      generation
+    }
+  }
+
+  beforeEach(() => {
+    ipc.loadSession.mockReset().mockResolvedValue(archive)
+    ipc.loadSessionEnrichment.mockReset().mockResolvedValue({
+      carData: [],
+      position: [],
+      duration: 10,
+      nextCarDataOffset: 0,
+      nextPositionOffset: 0,
+      done: true
+    })
+    ipc.getLive.mockReset()
+    storeMem.clear()
+  })
+
+  it('shows no outline until a car has demonstrably closed a lap', async () => {
+    // A third of a lap in. Drawing this as "the circuit" is what made the live
+    // map look broken: an arbitrary arc of whatever one car had driven so far.
+    ipc.getLive.mockResolvedValue(liveWithArc(1, 20))
+    const provider = new F1LiveProvider()
+    await provider.loadSession('live')
+
+    expect(provider.getSnapshotAt(19).trackPath).toEqual([])
+    // …and nothing partial is written to the weekend's outline cache.
+    expect(storeMem.get('trackpaths:2026/Test_Grand_Prix')).toBeUndefined()
+  })
+
+  it('adopts and caches the outline once the lap closes', async () => {
+    ipc.getLive.mockResolvedValue(liveWithArc(1, 61))
+    const provider = new F1LiveProvider()
+    await provider.loadSession('live')
+
+    expect(provider.getSnapshotAt(60).trackPath.length).toBeGreaterThan(20)
+    expect(storeMem.get('trackpaths:2026/Test_Grand_Prix')).toBeDefined()
+  })
+
+  it('keeps a cached outline instead of replacing it with a partial live trace', async () => {
+    // THE LIVE MAP BUG: every poll re-derived the outline from whatever Position
+    // data had arrived, so the weekend's proven outline — loaded moments earlier
+    // — was overwritten by a fragment on the very next poll.
+    const cached = exactClosedCachedPath()
+    storeMem.set('trackpaths:2026/Test_Grand_Prix', cached)
+    ipc.getLive.mockResolvedValue(liveWithArc(1, 15))
+
+    const provider = new F1LiveProvider()
+    await provider.loadSession('live')
+    expect(provider.getSnapshotAt(14).trackPath).toEqual(cached)
+
+    // A second poll on the same connection, carrying a little more of the arc.
+    ipc.getLive.mockResolvedValue(liveWithArc(1, 25))
+    await provider.loadSession('live')
+    expect(provider.getSnapshotAt(24).trackPath).toEqual(cached)
+    expect(storeMem.get('trackpaths:2026/Test_Grand_Prix')).toEqual(cached)
   })
 })

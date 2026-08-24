@@ -1,6 +1,8 @@
 import type { TimingEntry } from '@shared/models'
 import type { RaceSnapshot } from '@renderer/core/providers/types'
 import { driverRecentPace } from './AnalyticsEngine'
+import { circuitPitLoss } from './StrategyEngine'
+import { buildPitCycleField, classifyCloseTraffic } from './PitCycleModel'
 
 /**
  * WinProbabilityEngine — a deterministic, always-available model for each
@@ -454,7 +456,9 @@ export const WinProbabilityEngine = {
       gapQuality: number
       gapSource: GapSource
       paceClosePerLap: number
+      paceContaminated: boolean
       paceConfidence: number
+      pitCycleFactor: string | null
       tyreDeltaPerLap: number
       tyreConfidence: number
       penaltySeconds: number
@@ -473,20 +477,25 @@ export const WinProbabilityEngine = {
     const leaderPace = recentPaceFor(snapshot, leaderEntry)
     const leaderTyreScore = tyreStateScore(tyreCompound(leaderEntry), stintAgeLaps(leaderEntry))
     const gapEstimates = resolveGapEstimates(runners, progress, neutralized)
+    const pitCycleField = buildPitCycleField(snapshot, circuitPitLoss(snapshot).seconds, runners)
 
     const provisional: Cand[] = runners.map((entry) => {
       const gapEstimate =
         gapEstimates.get(entry.driverNumber) ?? ({ margin: 0, quality: UNKNOWN_GAP_QUALITY, source: 'position' } as const)
+      const pitCycle = pitCycleField.byDriver.get(entry.driverNumber)
+      const closeTraffic = classifyCloseTraffic(snapshot, entry)
       const pace = recentPaceFor(snapshot, entry)
       const samples = paceSampleCount(snapshot, entry)
       const rawPaceConfidence =
         leaderPace != null && pace != null ? 1 - Math.exp(-clamp(samples, 0, 8) / 2.4) : 0
+      const paceTrafficPenalty = closeTraffic.isCloseTraffic ? 0.18 : 1
       const paceConfidence =
-        rawPaceConfidence * (0.55 + 0.45 * progress) * (0.25 + 0.75 * gapEstimate.quality) * (neutralized ? 0.8 : 1)
-      const paceClosePerLap =
+        rawPaceConfidence * (0.55 + 0.45 * progress) * (0.25 + 0.75 * gapEstimate.quality) * (neutralized ? 0.8 : 1) * paceTrafficPenalty
+      const rawPaceClosePerLap =
         leaderPace != null && pace != null
           ? clamp(leaderPace - pace, -MAX_CLOSE_RATE, MAX_CLOSE_RATE)
           : 0
+      const paceClosePerLap = closeTraffic.isCloseTraffic ? rawPaceClosePerLap * 0.25 : rawPaceClosePerLap
       const paceEffect = -paceClosePerLap * projectionLaps * paceConfidence
 
       const compound = tyreCompound(entry)
@@ -503,13 +512,15 @@ export const WinProbabilityEngine = {
 
       const penalty = timePenaltySeconds(entry)
       const confidence = clamp(
-        0.08 +
+        (0.08 +
           0.34 * gapEstimate.quality +
           0.22 * rawPaceConfidence +
           0.1 * rawTyreConfidence +
           0.18 * progress +
           (leaderPace != null ? 0.05 : 0) -
-          (neutralized ? 0.08 : 0),
+          (neutralized ? 0.08 : 0)) *
+          (pitCycle?.confidence === 'medium' ? 0.9 : 1) *
+          (closeTraffic.isCloseTraffic ? 0.82 : 1),
         0.05,
         0.99
       )
@@ -520,11 +531,13 @@ export const WinProbabilityEngine = {
         gapQuality: gapEstimate.quality,
         gapSource: gapEstimate.source,
         paceClosePerLap,
+        paceContaminated: closeTraffic.isCloseTraffic,
         paceConfidence,
+        pitCycleFactor: pitCycle?.cycleFactor ?? null,
         tyreDeltaPerLap,
         tyreConfidence,
         penaltySeconds: penalty,
-        margin: gapEstimate.margin + paceEffect + tyreEffect + penalty,
+        margin: gapEstimate.margin + (pitCycle?.relativeAdjustmentSec ?? 0) + paceEffect + tyreEffect + penalty,
         confidence
       }
     })
@@ -602,9 +615,12 @@ export const WinProbabilityEngine = {
       const factors: string[] = []
 
       if (r.cand.penaltySeconds > 0) factors.push(`+${formatPenalty(r.cand.penaltySeconds)}s penalty`)
+      if (r.cand.pitCycleFactor != null) factors.push(r.cand.pitCycleFactor)
       if (pos === 1) factors.push('Track leader')
 
-      if (Math.abs(r.cand.paceClosePerLap) >= 0.05 && r.cand.paceConfidence >= 0.2) {
+      if (r.cand.paceContaminated) {
+        factors.push('Pace masked by close traffic')
+      } else if (Math.abs(r.cand.paceClosePerLap) >= 0.05 && r.cand.paceConfidence >= 0.2) {
         factors.push(`Pace ${formatSigned(r.cand.paceClosePerLap)}s/lap`)
       }
 

@@ -1,6 +1,6 @@
 import { BrowserWindow, WebContentsView, shell, session, type Session } from 'electron'
 import type { SurfaceBounds, SetVideoModeRequest } from '@shared/ipc-contract'
-import type { VideoMode, VideoModeState, Tristate } from '@shared/models'
+import type { VideoMode, VideoModeState, Tristate, VideoPlaybackProbe } from '@shared/models'
 import { DEFAULT_TOD_URL } from '@shared/constants'
 import {
   isHardFailure,
@@ -31,6 +31,40 @@ import {
  * The manager is the single authority for `VideoModeState`, which it pushes to
  * the renderer on every meaningful change.
  */
+
+/** Shape returned by PROBE_JS from inside the TOD page. */
+interface RawPlaybackReading {
+  currentTime: number
+  paused: boolean
+  seekableEnd: number | null
+  mediaKey: string | null
+}
+
+/**
+ * Runs inside a TOD frame and reports its player's clock, or null if that frame
+ * has no real media. Read-only by construction: it looks at four properties of
+ * the largest ready `<video>` and returns primitives.
+ *
+ * `mediaKey` deliberately avoids the media URL (which can carry session tokens)
+ * — the intrinsic duration plus the video's dimensions change together whenever
+ * a different asset is loaded, which is all the anchor needs to notice.
+ */
+const PROBE_JS = `(() => {
+  const videos = Array.from(document.querySelectorAll('video'))
+    .filter((v) => v.readyState > 0 && Number.isFinite(v.currentTime));
+  if (videos.length === 0) return null;
+  const v = videos.sort((a, b) =>
+    (b.videoWidth * b.videoHeight) - (a.videoWidth * a.videoHeight))[0];
+  let seekableEnd = null;
+  try { if (v.seekable && v.seekable.length > 0) seekableEnd = v.seekable.end(v.seekable.length - 1); } catch (_) {}
+  const duration = Number.isFinite(v.duration) ? Math.round(v.duration) : 'live';
+  return {
+    currentTime: v.currentTime,
+    paused: !!v.paused,
+    seekableEnd: seekableEnd,
+    mediaKey: duration + 'x' + v.videoWidth + 'x' + v.videoHeight
+  };
+})()`
 
 const TOD_PARTITION = 'persist:tod'
 const LOAD_TIMEOUT_MS = 20_000
@@ -152,6 +186,68 @@ export class VideoSurfaceManager {
 
   async openExternal(url?: string): Promise<void> {
     await shell.openExternal(this.trustedTodUrl(url ?? this.state.url))
+  }
+
+  /**
+   * Read the TOD player's clock so the dashboard can follow it.
+   *
+   * The player lives in a third-party page RaceDeck only hosts, and it is
+   * usually several frames deep, so every frame in the subtree is asked and the
+   * first one holding real media wins. Nothing here touches playback or content
+   * protection — it reads the same three properties any page can read of its own
+   * `<video>` element, and returns numbers.
+   */
+  async probePlayback(): Promise<VideoPlaybackProbe> {
+    const miss = (reason: string): VideoPlaybackProbe => ({
+      ok: false,
+      currentTime: 0,
+      paused: true,
+      seekableEnd: null,
+      mediaKey: null,
+      atMs: Date.now(),
+      reason
+    })
+
+    const wc =
+      this.state.mode === 'embedded'
+        ? this.view?.webContents
+        : this.state.mode === 'companion'
+          ? this.companion?.webContents
+          : null
+    if (!wc || wc.isDestroyed()) {
+      return miss(
+        this.state.mode === 'external'
+          ? 'TOD is open in an external browser, which RaceDeck cannot read.'
+          : 'No TOD surface is open.'
+      )
+    }
+
+    let frames: Electron.WebFrameMain[]
+    try {
+      frames = wc.mainFrame.framesInSubtree
+    } catch {
+      return miss('The TOD surface is still loading.')
+    }
+
+    for (const frame of frames) {
+      let reading: RawPlaybackReading | null = null
+      try {
+        reading = (await frame.executeJavaScript(PROBE_JS, true)) as RawPlaybackReading | null
+      } catch {
+        continue // cross-origin frame we cannot reach, or one that just went away
+      }
+      if (!reading || typeof reading.currentTime !== 'number') continue
+      return {
+        ok: true,
+        currentTime: reading.currentTime,
+        paused: Boolean(reading.paused),
+        seekableEnd: typeof reading.seekableEnd === 'number' ? reading.seekableEnd : null,
+        mediaKey: typeof reading.mediaKey === 'string' ? reading.mediaKey : null,
+        atMs: Date.now(),
+        reason: null
+      }
+    }
+    return miss('No video is playing in the TOD surface yet.')
   }
 
   toggleDevTools(): void {

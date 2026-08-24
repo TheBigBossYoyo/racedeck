@@ -75,7 +75,9 @@ export function StatusBar() {
       <div className="h-3 w-px bg-hairline/30" />
 
       <div className="flex items-center gap-1.5 tnum">
-          <span data-testid="effective-data-time" className="text-fg">{formatDuration(effectiveDataTime())}</span>
+        <span data-testid="effective-data-time" className="text-fg">
+          {formatDuration(effectiveDataTime())}
+        </span>
         <span className="text-fg-subtle/50">/ {formatDuration(duration)}</span>
       </div>
 
@@ -102,6 +104,8 @@ export function StatusBar() {
             <AvailDot on={av.positionProgress || av.positions} label="POS" />
             <AvailDot on={av.weather} label="WX" />
             <AvailDot on={av.telemetry} label="TELEM" />
+            <AvailDot on={(snapshot?.teamRadio?.length ?? 0) > 0} label="RADIO" />
+            <AvailDot on={(snapshot?.pitLaneTimes?.length ?? 0) > 0} label="PIT" />
           </div>
         </>
       )}
@@ -114,7 +118,15 @@ export function StatusBar() {
           <span className={unseen > 0 ? 'text-accent' : 'text-fg-subtle'}>{unseen} alerts</span>
         </div>
         <div className="h-3 w-px bg-hairline/30" />
-        <Tooltip content={info?.drmReady ? 'Widevine ready (castLabs)' : info?.drmCapable ? 'castLabs build detected, but Widevine is unavailable' : 'Standard build — DRM playback requires the castLabs Electron build'}>
+        <Tooltip
+          content={
+            info?.drmReady
+              ? 'Widevine ready (castLabs)'
+              : info?.drmCapable
+                ? 'castLabs build detected, but Widevine is unavailable'
+                : 'Standard build — DRM playback requires the castLabs Electron build'
+          }
+        >
           <div className="flex items-center gap-1">
             {info?.drmReady ? (
               <ShieldCheck className="h-3 w-3 text-good" />

@@ -105,6 +105,9 @@ export function pitPredictionSummary(p: PitPrediction): string {
   if (!p.available) return p.reason ?? 'No projection available.'
   const parts = [
     `${p.code}: pit now → ~P${p.projectedPosition}`,
+    p.requiredStopsRemaining > 0 && p.cycleAdjustedPosition != null
+      ? `(required stop still owed; cycle ~P${p.cycleAdjustedPosition})`
+      : '',
     p.positionsLost != null
       ? p.positionsLost > 0
         ? `(${p.positionsLost} lost)`
@@ -210,6 +213,11 @@ export function buildRaceContext(
     if (p.intervalToCarAheadSec != null && p.carAhead != null) {
       lines.push(
         `  - Undercut vs ${codeOf(p.carAhead)} (${fmt(p.intervalToCarAheadSec, 1, 's')} ahead): net ~${fmt(p.undercutNetSec, 1, 's')} → ${p.undercutViable ? 'projected to WORK' : 'projected to fall short'}.`
+      )
+    }
+    if (p.requiredStopsRemaining > 0) {
+      lines.push(
+        `  - ${p.requiredStopsRemaining} required stop${p.requiredStopsRemaining === 1 ? '' : 's'} still outstanding; expected cycle after serving them ~P${p.cycleAdjustedPosition ?? '—'}.`
       )
     }
     if (p.degradationSlope != null) {

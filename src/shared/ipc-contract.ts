@@ -1,4 +1,4 @@
-import type { VideoMode, VideoModeState } from './models'
+import type { VideoMode, VideoModeState, VideoPlaybackProbe } from './models'
 import type { AiCompletionRequest, AiCompletionResult } from './ai'
 import type {
   MarketWinnerRequest,
@@ -44,6 +44,7 @@ export const IPC = {
   VIDEO_OPEN_EXTERNAL: 'video:open-external',
   VIDEO_SET_VISIBLE: 'video:set-visible',
   VIDEO_TOGGLE_DEVTOOLS: 'video:toggle-devtools',
+  VIDEO_PROBE_PLAYBACK: 'video:probe-playback',
   VIDEO_STATE_CHANGED: 'video:state-changed', // main -> renderer
 
   // ── AI Race Engineer ───────────────────────────────────────────────
@@ -144,6 +145,8 @@ export interface RaceDeckApi {
     back(): void
     openExternal(url?: string): Promise<void>
     toggleDevTools(): void
+    /** Read the TOD player's clock, so sync can follow pauses and seeks. */
+    probePlayback(): Promise<VideoPlaybackProbe>
     /** Subscribe to live VideoModeState pushes. Returns an unsubscribe fn. */
     onStateChanged(cb: (state: VideoModeState) => void): () => void
   }

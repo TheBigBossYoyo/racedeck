@@ -88,6 +88,7 @@ export function registerIpc(deps: IpcDeps): void {
   ipcMain.on(IPC.VIDEO_RELOAD, () => video.reload())
   ipcMain.on(IPC.VIDEO_BACK, () => video.back())
   ipcMain.on(IPC.VIDEO_TOGGLE_DEVTOOLS, () => video.toggleDevTools())
+  ipcMain.handle(IPC.VIDEO_PROBE_PLAYBACK, () => video.probePlayback())
 
   // ── AI Race Engineer ───────────────────────────────────────────────
   ipcMain.handle(IPC.AI_COMPLETE, (_e, req: AiCompletionRequest) => ai.complete(req))

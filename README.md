@@ -149,11 +149,11 @@ Provider‑abstracted, with capability flags surfaced in the UI:
 
 **Prerequisites:** Node.js ≥ 22.12 and npm. Windows/macOS/Linux (developed & verified on Windows).
 
-```bash
+```powershell
 # 1. Install dependencies (downloads the Electron binary the first time)
 npm install
 
-# 2. Run in development — ONE command, ONE terminal.
+# 2. Run the raw development executable.
 #    electron-vite compiles main+preload, serves the renderer with HMR,
 #    and launches the desktop window. There is no separate backend to start.
 npm run dev
@@ -164,13 +164,24 @@ npm run typecheck
 # 4. Build production bundles
 npm run build
 
-# 5. Package a Windows installer (optional)
+# 5. Package an unsigned raw Windows installer if you only need a local build
 npm run build:win
+
+# 6. Package the supported Windows installer for real embedded commercial playback
+npm run build:win:vmp
 ```
 
 > RaceDeck already pins the castLabs Widevine build. `npm run enable-drm` is a
 > repair command that restores that exact dependency if a stock Electron package
 > was installed manually; it is not a second process.
+
+> **Warning**
+> Use `npm run dev` for normal development and UAT only. Use `npm run build:win`
+> for a raw local installer only. Do **not** validate protected commercial
+> embedded playback with either one. They can show a working dashboard and even
+> load TOD, yet protected license renewal can still fail with a generic `2003`
+> playback error. Widevine Ready alone is not the production boundary. Production
+> VMP signing is required for commercial license renewals.
 
 On first launch RaceDeck opens the **Demo Grand Prix** mid‑race, so the dashboard is immediately rich. Press **▶** to play, scrub the timeline, drag panels (toggle **Edit**), switch layouts, and open TOD from the video panel.
 
@@ -188,9 +199,9 @@ On first launch RaceDeck opens the **Demo Grand Prix** mid‑race, so the dashbo
 
 ## Enabling real DRM playback (castLabs)
 
-Stock Electron cannot decode Widevine‑protected video. For **real TOD playback**, swap in the castLabs Widevine build and (for distribution) VMP‑sign the packaged app:
+Stock Electron cannot decode Widevine‑protected video. For **real TOD playback**, swap in the castLabs Widevine build and, for supported production validation, use the VMP-signed packaged app:
 
-```bash
+```powershell
 npm run enable-drm     # restores the pinned castLabs Electron 43 dependency
 ```
 
@@ -210,11 +221,74 @@ still show a generic technical error even when the status says **Widevine Ready*
 ships Google's production VMP certificate while a development ECS launch does not. RaceDeck's
 Windows production pipeline therefore includes an official castLabs EVS hook:
 
-```bash
+```powershell
 npm run evs:install       # install/upgrade the official castlabs-evs Python client
 npm run evs:signup        # one-time free EVS account signup (or: npm run evs:login)
 npm run build:win:vmp     # code-sign/package, then EVS-sign + verify the streaming VMP signature
 ```
+
+Use this exact flow on Windows when you need the proven production path for TOD embedded playback:
+
+1. Install the EVS client:
+
+   ```powershell
+   npm run evs:install
+   ```
+
+2. Create or sign into your EVS account:
+
+   ```powershell
+   npm run evs:signup
+   npm run evs:login
+   ```
+
+3. If you forgot the EVS password, reset it first, then sign in again:
+
+   ```powershell
+   python -m castlabs_evs.account reset
+   npm run evs:login
+   ```
+
+4. Build the signed package:
+
+   ```powershell
+   npm run build:win:vmp
+   ```
+
+5. Confirm the streaming signature during the build, or re-run verification if needed:
+
+   ```powershell
+   python -m castlabs_evs.vmp verify-pkg --streaming .\release\0.4.0\win-unpacked
+   ```
+
+6. Install the generated Windows installer:
+
+   ```powershell
+   .\release\0.4.0\racedeck-0.4.0-setup.exe
+   ```
+
+The generated installer path is:
+
+```text
+release/<version>/racedeck-<version>-setup.exe
+```
+
+For the proven build referenced here, that was:
+
+```text
+release/0.4.0/racedeck-0.4.0-setup.exe
+```
+
+Keep credentials out of shell history, screenshots, logs, commits, and support notes. Never paste
+EVS passwords or tokens into the repository. If EVS authentication expires during packaging or
+verification, sign in again with `npm run evs:login` and rerun the command. If TOD or the service
+asks for account reauthentication inside the installed app, complete that login in the browser
+surface and let the provider refresh its own tokens there.
+
+> **Do not use `npm run dev` or `npm run build:win` to validate commercial embedded playback.**
+> Those raw ECS paths are useful for development, local UI checks, and UAT, but they are not the
+> supported production boundary. They can report **Widevine Ready** and still fail protected
+> commercial license renewal. Use the installed `build:win:vmp` package for that check.
 
 `build:win:vmp` first creates the unpacked Windows application (including Authenticode signing when
 configured), then runs `sign-pkg --streaming` and `verify-pkg --streaming`, and finally creates NSIS
@@ -226,8 +300,9 @@ still produces an EVS-signable personal-use package without requiring Windows sy
 `EVS_PASSWD`, and `EVS_NO_ASK=1`; never commit those values. Windows Developer Mode or equivalent
 symlink privilege may still be required when Authenticode signing is enabled.
 
-This is the supported production remedy—it does not bypass DRM or inspect license traffic. A real
-authenticated TOD playback check must be performed with the resulting VMP-signed package.
+This is the supported production remedy. It does not bypass DRM or inspect license traffic. A real
+authenticated TOD playback and renewal check must be performed with the resulting installed
+VMP-signed package.
 
 ---
 

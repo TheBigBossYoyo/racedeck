@@ -3,7 +3,7 @@ import { cva, type VariantProps } from 'class-variance-authority'
 import { cn, hexColor } from '@renderer/lib/utils'
 import { TYRE_LABELS } from '@shared/constants'
 import { useTyreColors } from '@renderer/lib/useTyreColors'
-import type { TyreCompound } from '@shared/models'
+import type { DataProvenance, TyreCompound } from '@shared/models'
 
 // ── Button ───────────────────────────────────────────────────────────────────
 const buttonVariants = cva(
@@ -15,8 +15,10 @@ const buttonVariants = cva(
           'bg-accent/15 text-accent border border-accent/30 hover:bg-accent/25 hover:border-accent/50',
         solid: 'bg-accent text-black hover:brightness-110 shadow-glow',
         ghost: 'text-fg-muted hover:text-fg hover:bg-white/5',
-        outline: 'border border-hairline/40 text-fg-muted hover:text-fg hover:border-hairline/70 hover:bg-white/5',
-        subtle: 'bg-white/[0.04] text-fg-muted hover:bg-white/[0.08] hover:text-fg border border-white/5',
+        outline:
+          'border border-hairline/40 text-fg-muted hover:text-fg hover:border-hairline/70 hover:bg-white/5',
+        subtle:
+          'bg-white/[0.04] text-fg-muted hover:bg-white/[0.08] hover:text-fg border border-white/5',
         danger: 'bg-danger/15 text-danger border border-danger/30 hover:bg-danger/25'
       },
       size: {
@@ -32,8 +34,7 @@ const buttonVariants = cva(
 )
 
 export interface ButtonProps
-  extends ButtonHTMLAttributes<HTMLButtonElement>,
-    VariantProps<typeof buttonVariants> {}
+  extends ButtonHTMLAttributes<HTMLButtonElement>, VariantProps<typeof buttonVariants> {}
 
 export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
   ({ className, variant, size, ...props }, ref) => (
@@ -114,6 +115,43 @@ export function Badge({
   )
 }
 
+// ── Provenance badge ─────────────────────────────────────────────────────────
+
+const PROVENANCE_META: Record<
+  DataProvenance,
+  { label: string; tone: 'good' | 'accent' | 'warn' | 'neutral' }
+> = {
+  measured: { label: 'measured', tone: 'good' },
+  'feed-derived': { label: 'feed', tone: 'accent' },
+  modelled: { label: 'modelled', tone: 'warn' },
+  insufficient: { label: 'insufficient', tone: 'neutral' }
+}
+
+/**
+ * A consistent "how trustworthy is this number" marker (APP_IMPROVEMENT_ROADMAP.md
+ * P0 item 4). Similar-looking values across different widgets otherwise carry
+ * different evidentiary strength with no visible signal of that difference.
+ */
+export function ProvenanceBadge({
+  provenance,
+  detail,
+  className
+}: {
+  provenance: DataProvenance
+  /** Source/sample-count/replay-boundary text shown in the tooltip. */
+  detail?: string
+  className?: string
+}) {
+  const meta = PROVENANCE_META[provenance]
+  return (
+    <span title={detail}>
+      <Badge tone={meta.tone} className={className}>
+        {meta.label}
+      </Badge>
+    </span>
+  )
+}
+
 // ── Tyre compound pill ───────────────────────────────────────────────────────
 export function TyrePill({
   compound,
@@ -127,19 +165,30 @@ export function TyrePill({
   const tyreColors = useTyreColors()
   if (!compound) return <span className="text-fg-subtle">—</span>
   const color = tyreColors[compound]
+  const hardTyre = compound === 'HARD'
   return (
     <span className="inline-flex items-center gap-1">
       <span
         className={cn(
-          'grid place-items-center rounded-full border-2 font-bold text-black',
+          'grid place-items-center rounded-full border-2 font-bold',
           size === 'sm' ? 'h-4 w-4 text-[9px]' : 'h-5 w-5 text-[10px]'
         )}
-        style={{ borderColor: color, backgroundColor: `${color}22`, color }}
+        style={{
+          borderColor: hardTyre ? 'rgb(var(--fg-muted))' : color,
+          backgroundColor: `${color}22`,
+          color: hardTyre ? 'rgb(var(--fg))' : color
+        }}
         title={compound}
+        role="img"
+        aria-label={`${compound} tyre`}
       >
         {TYRE_LABELS[compound]}
       </span>
-      {age != null && <span className="tnum text-2xs text-fg-subtle" title={`${age} laps on this tyre`}>L{age}</span>}
+      {age != null && (
+        <span className="tnum text-2xs text-fg-subtle" title={`${age} laps on this tyre`}>
+          L{age}
+        </span>
+      )}
     </span>
   )
 }
@@ -171,7 +220,12 @@ export function StatusDot({
   return (
     <span className="relative inline-flex h-2 w-2">
       {pulse && (
-        <span className={cn('absolute inline-flex h-full w-full animate-ping rounded-full opacity-60', colors[tone])} />
+        <span
+          className={cn(
+            'absolute inline-flex h-full w-full animate-ping rounded-full opacity-60',
+            colors[tone]
+          )}
+        />
       )}
       <span className={cn('relative inline-flex h-2 w-2 rounded-full', colors[tone])} />
     </span>
@@ -186,7 +240,15 @@ export function Kbd({ children }: { children: ReactNode }) {
   )
 }
 
-export function EmptyState({ icon, title, hint }: { icon?: ReactNode; title: string; hint?: string }) {
+export function EmptyState({
+  icon,
+  title,
+  hint
+}: {
+  icon?: ReactNode
+  title: string
+  hint?: string
+}) {
   return (
     <div className="flex h-full flex-col items-center justify-center gap-2 p-4 text-center">
       {icon && <div className="text-fg-subtle/60 [&>svg]:h-7 [&>svg]:w-7">{icon}</div>}

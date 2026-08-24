@@ -1,9 +1,16 @@
 import type {
+  CurrentTyre,
   Driver,
+  DriverSessionBests,
+  DriverTyreStintHistory,
+  LapPositionSeries,
   LapSample,
+  PitLaneTime,
   PositionSample,
+  RaceControlMessage,
   SessionInfo,
   Stint,
+  TeamRadioClip,
   TelemetrySample,
   TimingEntry,
   WeatherSample
@@ -29,8 +36,10 @@ import { buildTimeline } from '@renderer/core/engines/SessionPhaseEngine'
 import {
   initErsState,
   integrateErs,
+  startLap,
   computeErsEstimate,
   applyOvertakeEligibility,
+  deriveEnergyTrend,
   type ErsDriverState,
   type ErsEstimate,
   type ErsTelemetrySample
@@ -57,6 +66,7 @@ import {
   collectTeamRadio,
   buildCurrentTyres,
   applyCurrentTyres,
+  buildTyreStintHistory,
   mergeTopThreeDrivers,
   latestTrackMessage,
   qualifyingPartAt,
@@ -65,12 +75,26 @@ import {
   type LapRecord
 } from './f1normalize'
 import { isF1SessionLive } from '@shared/f1-session-state'
+import { FeedMemo } from './FeedMemo'
 
 const PRECOMPUTE_YIELD_EVERY = 400
 const ENRICHMENT_CHUNK_LIMIT = 500 // matches the main-process hard maximum
 const ENRICHMENT_EARLY_CHUNK_LIMIT = 250 // finer early Position chunks → earlier closed-lap checks
 const ENRICHMENT_EARLY_CHUNK_WINDOW = 1_000 // points; covers a formation lap + first racing lap
 const ENRICHMENT_NOTIFY_MIN_MS = 300 // bound snapshot fan-out while chunks stream in
+/**
+ * Upper bound accepted from the persisted outline cache. Matches the tracer's
+ * own point budget, so a trace of a long circuit is not rejected on read-back.
+ */
+const TRACK_PATH_CACHE_MAX = 700
+
+/**
+ * Renderer-side retention for CarData/Position, matching the socket's own cap
+ * (~5 hours of running at the ~1 Hz these feeds arrive at). Scrubbing back
+ * beyond it loses telemetry and car positions; all timing history is kept.
+ */
+const LIVE_HIGH_RATE_RETENTION = 20_000
+const LIVE_CAPPED_TOPICS = new Set(['CarData', 'Position'])
 
 /**
  * Cooperative yield between preprocessing chunks. `scheduler.yield()` (or a
@@ -135,6 +159,7 @@ export class F1LiveProvider implements DataProvider {
   private pitLapIndexPoints = -1
   private teamRadioPoints: F1StreamPoint[] = []
   private currentTyrePoints: F1StreamPoint[] = []
+  private tyreStintSeriesPoints: F1StreamPoint[] = []
   private tlaRcmPoints: F1StreamPoint[] = []
   private positionPoints: F1StreamPoint[] = []
   private carDataPoints: F1StreamPoint[] = []
@@ -143,11 +168,26 @@ export class F1LiveProvider implements DataProvider {
   private lapsByDriver = new Map<number, LapRecord[]>()
   private totalLaps: number | null = null
   private trackPath: { x: number; y: number }[] = []
+  /**
+   * Has `trackPath` been proven to be a complete lap?
+   *
+   * Only a closed trace is a circuit; a partial one is the squiggle a single car
+   * happened to drive so far. Once true the outline is final for the session and
+   * is never recomputed — which also stops a live poll from spending O(all
+   * positions) rebuilding it several times a second.
+   */
+  private trackPathClosed = false
   private timelineCache: SessionTimeline | null = null
   private sessionLoadVersion = 0
   private updateListeners = new Set<() => void>()
   private liveCursors: Record<string, number> = {}
   private liveGeneration = 0
+  /**
+   * Wall-clock ms (`Date.now()`) each raw feed topic last received new points,
+   * for LIVE-session stale-feed detection (roadmap P0 item 5). Only stamped
+   * while polling `live`; cleared whenever a non-live session loads.
+   */
+  private feedLastWallClockMs: Record<string, number> = {}
   private telemetryAvailable = false
   /**
    * Rolling forward-scan state for lap history / drivers, kept across CONTINUING
@@ -188,6 +228,36 @@ export class F1LiveProvider implements DataProvider {
   private stintCache: Stint[] = []
   private lapCacheKey = ''
   private lapCache: LapSample[] = []
+
+  /**
+   * One memo per whole-feed derivation in `getSnapshotAt`. Each of these used to
+   * rescan (and mostly deep-merge) its entire stream on every snapshot, four
+   * times a second, so their combined cost grew without bound as a session ran.
+   * See FeedMemo for why the prefix length plus the last point is a sound key.
+   */
+  private memoRaceControl = new FeedMemo<RaceControlMessage[]>()
+  private memoDrivers = new FeedMemo<Driver[]>()
+  private memoCurrentTyres = new FeedMemo<CurrentTyre[]>()
+  private memoTyreStintHistory = new FeedMemo<DriverTyreStintHistory[]>()
+  private memoWeatherHistory = new FeedMemo<WeatherSample[]>()
+  private memoLapPositions = new FeedMemo<LapPositionSeries[]>()
+  private memoSessionBests = new FeedMemo<DriverSessionBests[]>()
+  private memoPitLaneTimes = new FeedMemo<PitLaneTime[]>()
+  private memoTeamRadio = new FeedMemo<TeamRadioClip[]>()
+  private memoTrackMessage = new FeedMemo<string | null>()
+
+  private resetFeedMemos(): void {
+    this.memoRaceControl.reset()
+    this.memoDrivers.reset()
+    this.memoCurrentTyres.reset()
+    this.memoTyreStintHistory.reset()
+    this.memoWeatherHistory.reset()
+    this.memoLapPositions.reset()
+    this.memoSessionBests.reset()
+    this.memoPitLaneTimes.reset()
+    this.memoTeamRadio.reset()
+    this.memoTrackMessage.reset()
+  }
 
   async listSessions(): Promise<SessionInfo[]> {
     if (!hasBridge()) return []
@@ -233,6 +303,9 @@ export class F1LiveProvider implements DataProvider {
       // the underlying connection generation did not change while viewing replay.
       this.liveCursors = {}
       this.liveGeneration = 0
+      // A replay's clock isn't wall-clock time, so stale live timestamps must
+      // not leak into (or persist stale into) a later live view.
+      this.feedLastWallClockMs = {}
     }
     // `live` pulls the accumulated real-time buffer; otherwise the archive.
     let data: F1SessionData | null
@@ -240,7 +313,8 @@ export class F1LiveProvider implements DataProvider {
     let cachedTrackPath: Promise<{ x: number; y: number }[] | null> | null = null
     if (sessionId === 'live') {
       const delta = await bridge().f1.getLive(this.liveCursors, this.liveGeneration)
-      if (loadVersion !== this.sessionLoadVersion) throw new Error('F1 session load was superseded.')
+      if (loadVersion !== this.sessionLoadVersion)
+        throw new Error('F1 session load was superseded.')
       const merged = this.mergeLiveDelta(delta)
       data = merged.data
       continuing = merged.continuing
@@ -253,7 +327,8 @@ export class F1LiveProvider implements DataProvider {
     } else {
       cachedTrackPath = this.loadCachedTrackPath(sessionId)
       data = await bridge().f1.loadSession(sessionId)
-      if (loadVersion !== this.sessionLoadVersion) throw new Error('F1 session load was superseded.')
+      if (loadVersion !== this.sessionLoadVersion)
+        throw new Error('F1 session load was superseded.')
     }
     if (!data) throw new Error('Not connected to F1 live timing yet — sign in and connect first.')
     const session = await this.ingest(data, loadVersion, continuing)
@@ -263,14 +338,20 @@ export class F1LiveProvider implements DataProvider {
       // outline (one meeting = one layout). Reusing it lets the map publish
       // with the FIRST position chunk instead of waiting for a closed lap.
       const cached = await cachedTrackPath
-      if (loadVersion !== this.sessionLoadVersion) throw new Error('F1 session load was superseded.')
-      if (cached && this.trackPath.length === 0) this.trackPath = cached
+      if (loadVersion !== this.sessionLoadVersion)
+        throw new Error('F1 session load was superseded.')
+      if (cached && !this.trackPathClosed) {
+        this.trackPath = cached
+        this.trackPathClosed = true
+      }
+      this.publishPositionsIfReady(false)
     }
     if (sessionId !== 'live' && data.partialTiming) {
       // The timing tail is still downloading: stream and preprocess it before
       // the session counts as loaded, so "loaded" still means fully scrubable.
       await this.streamCoreTiming(sessionId, loadVersion)
-      if (loadVersion !== this.sessionLoadVersion) throw new Error('F1 session load was superseded.')
+      if (loadVersion !== this.sessionLoadVersion)
+        throw new Error('F1 session load was superseded.')
     }
     if (sessionId !== 'live') void this.loadEnrichment(sessionId, loadVersion)
     return session
@@ -315,19 +396,58 @@ export class F1LiveProvider implements DataProvider {
       const key = this.trackPathCacheKey(sessionId, feedPath)
       if (!key) return null
       const value = await persist.get<unknown>(STORE_NS.TRACK_PATHS, key)
-      if (!Array.isArray(value) || value.length < 20 || value.length > 400) return null
+      if (!Array.isArray(value) || value.length < 20 || value.length > TRACK_PATH_CACHE_MAX)
+        return null
       const path: { x: number; y: number }[] = []
       for (const raw of value) {
         const point = rec(raw)
         const x = point.x
         const y = point.y
-        if (typeof x !== 'number' || typeof y !== 'number' || !isFinite(x) || !isFinite(y)) return null
+        if (typeof x !== 'number' || typeof y !== 'number' || !isFinite(x) || !isFinite(y))
+          return null
         path.push({ x, y })
       }
+      const first = path[0]
+      const last = path[path.length - 1]
+      if (!first || !last || first.x !== last.x || first.y !== last.y) return null
       return path
     } catch {
       return null
     }
+  }
+
+  /**
+   * Take the circuit outline as far as the positions seen so far allow, and
+   * never take a step backwards. Returns true if the outline changed.
+   *
+   * The rule is that only a CLOSED trace — one where the reference car returned
+   * to where it started after covering a plausible lap — may be shown or cached.
+   *
+   * This used to run unconditionally on every ingest, which broke the live map
+   * in two ways. A live poll arrives every couple of seconds with only a few
+   * minutes of positions behind it, so the rebuilt trace was whatever partial
+   * squiggle one car had driven; it was published as the circuit, and (once past
+   * 20 points) written to the weekend's outline cache, corrupting it for every
+   * later session at the same track. It also overwrote the good cached outline
+   * loaded moments earlier, so seeding the map from an earlier session never
+   * actually worked. `allowOpenFallback` exists only for a fully downloaded
+   * archive feed, where a partial trace is all that will ever exist — and even
+   * then it is shown but never cached.
+   */
+  private adoptTrackPath(allowOpenFallback: boolean): boolean {
+    if (this.trackPathClosed) return false
+    const closed = buildClosedTrackPath(this.positionPoints)
+    if (closed && closed.length > 0) {
+      this.trackPath = closed
+      this.trackPathClosed = true
+      this.saveTrackPathCache(closed)
+      return true
+    }
+    if (!allowOpenFallback || this.trackPath.length > 0) return false
+    const open = buildTrackPath(this.positionPoints)
+    if (open.length === 0) return false
+    this.trackPath = open
+    return true
   }
 
   private saveTrackPathCache(path: { x: number; y: number }[]): void {
@@ -340,18 +460,72 @@ export class F1LiveProvider implements DataProvider {
     void persist.set(STORE_NS.TRACK_PATHS, key, path).catch(() => undefined)
   }
 
-  private mergeLiveDelta(delta: F1LiveDataDelta | null): { data: F1SessionData | null; continuing: boolean } {
+  private publishPositionsIfReady(allowOpenFallback: boolean): boolean {
+    if (this.positionsPublished || this.positionPoints.length === 0) return false
+    if (this.trackPath.length === 0 && !allowOpenFallback) return false
+    this.positionsPublished = true
+    return true
+  }
+
+  /**
+   * Bound the two high-rate feeds the renderer accumulates across live polls.
+   *
+   * The socket already caps its own buffers, but it caps what it HOLDS, not what
+   * it has ever sent: the renderer stitches every delta onto the end of its own
+   * array, so a connection left open across a whole race weekend day kept
+   * growing after the socket had started discarding. Retaining the same window
+   * the socket does keeps the renderer's footprint bounded by the same rule, and
+   * discards the same points the socket has already let go of.
+   *
+   * `ersProcessed` indexes into `carDataPoints`, so it moves with the trim —
+   * otherwise the ERS integrator would skip exactly the discarded points'
+   * worth of new telemetry.
+   */
+  private trimHighRateStream(topic: string, points: F1StreamPoint[]): F1StreamPoint[] {
+    if (points.length <= LIVE_HIGH_RATE_RETENTION) return points
+    const dropped = points.length - LIVE_HIGH_RATE_RETENTION
+    if (topic === 'CarData') this.ersProcessed = Math.max(0, this.ersProcessed - dropped)
+    return points.slice(dropped)
+  }
+
+  /** Ms since each topic last received data, as of right now. */
+  private computeFeedFreshness(): Record<string, number> {
+    const now = Date.now()
+    const out: Record<string, number> = {}
+    for (const [topic, lastMs] of Object.entries(this.feedLastWallClockMs)) {
+      out[topic] = Math.max(0, now - lastMs)
+    }
+    return out
+  }
+
+  /** Record that these topics just received data, for stale-feed detection. */
+  private stampFeedFreshness(streams: Record<string, F1StreamPoint[]>): void {
+    const now = Date.now()
+    for (const [topic, points] of Object.entries(streams)) {
+      if (points.length > 0) this.feedLastWallClockMs[topic] = now
+    }
+  }
+
+  private mergeLiveDelta(delta: F1LiveDataDelta | null): {
+    data: F1SessionData | null
+    continuing: boolean
+  } {
     if (!delta) return { data: null, continuing: false }
     const continuing =
-      this.session?.id === 'live' &&
-      this.data != null &&
-      this.liveGeneration === delta.generation
+      this.session?.id === 'live' && this.data != null && this.liveGeneration === delta.generation
     this.liveCursors = delta.cursors
     this.liveGeneration = delta.generation
+    // `delta.streams` is either just-arrived new points (continuing) or the
+    // full current buffer (first poll) — either way, every topic present here
+    // just became current as of now.
+    this.stampFeedFreshness(delta.streams)
     if (!continuing || !this.data) return { data: delta, continuing: false }
     const streams = { ...this.data.streams }
     for (const [topic, points] of Object.entries(delta.streams)) {
-      streams[topic] = [...(streams[topic] ?? []), ...points]
+      const merged = [...(streams[topic] ?? []), ...points]
+      streams[topic] = LIVE_CAPPED_TOPICS.has(topic)
+        ? this.trimHighRateStream(topic, merged)
+        : merged
     }
     return {
       data: {
@@ -386,7 +560,8 @@ export class F1LiveProvider implements DataProvider {
       if (points.length > 0) {
         this.timingPoints.push(...points)
         await this.appendLapHistory(loadVersion)
-        if (loadVersion !== this.sessionLoadVersion) throw new Error('F1 session load was superseded.')
+        if (loadVersion !== this.sessionLoadVersion)
+          throw new Error('F1 session load was superseded.')
       }
       if (chunk.done) break
       await yieldToRenderer()
@@ -455,9 +630,10 @@ export class F1LiveProvider implements DataProvider {
     for (;;) {
       // Position starts with finer chunks so the closed-lap check (and hence the
       // map) can trigger as early in the download as possible.
-      const limit = feed === 'position' && !this.positionsPublished && offset < ENRICHMENT_EARLY_CHUNK_WINDOW
-        ? ENRICHMENT_EARLY_CHUNK_LIMIT
-        : ENRICHMENT_CHUNK_LIMIT
+      const limit =
+        feed === 'position' && !this.positionsPublished && offset < ENRICHMENT_EARLY_CHUNK_WINDOW
+          ? ENRICHMENT_EARLY_CHUNK_LIMIT
+          : ENRICHMENT_CHUNK_LIMIT
       const chunk = await bridge().f1.loadSessionEnrichment({
         path: sessionId,
         feed,
@@ -481,29 +657,11 @@ export class F1LiveProvider implements DataProvider {
 
   private appendPositionPoints(points: F1StreamPoint[], done: boolean, duration: number): void {
     if (points.length > 0) this.positionPoints.push(...points)
-    let justPublished = false
-    if (!this.positionsPublished) {
-      if (this.trackPath.length > 0 && this.positionPoints.length > 0) {
-        // The circuit outline is already known (cached from this weekend) —
-        // markers can publish with the very first coordinates.
-        this.positionsPublished = true
-        justPublished = true
-      } else {
-        const path = done
-          ? buildTrackPath(this.positionPoints)
-          : buildClosedTrackPath(this.positionPoints)
-        if (path && path.length > 0) {
-          this.trackPath = path
-          this.positionsPublished = true
-          justPublished = true
-          this.saveTrackPathCache(path)
-        } else if (done) {
-          // No drawable circuit in this feed; still expose the raw coordinates.
-          this.positionsPublished = true
-          justPublished = true
-        }
-      }
-    }
+    const gainedOutline = this.adoptTrackPath(done)
+    // Markers publish as soon as there is an outline to place them on — or,
+    // once the whole feed is in, even without one.
+    let justPublished = this.publishPositionsIfReady(done)
+    justPublished ||= gainedOutline
     if (done && this.data) {
       this.data = {
         ...this.data,
@@ -556,7 +714,8 @@ export class F1LiveProvider implements DataProvider {
     expectedLoadVersion = this.sessionLoadVersion,
     continuing = false
   ): Promise<SessionInfo> {
-    if (expectedLoadVersion !== this.sessionLoadVersion) throw new Error('F1 session load was superseded.')
+    if (expectedLoadVersion !== this.sessionLoadVersion)
+      throw new Error('F1 session load was superseded.')
     this.data = data
     this.session = normalizeSessionInfo(data.summary)
 
@@ -573,12 +732,11 @@ export class F1LiveProvider implements DataProvider {
     this.pitLanePoints = s.PitLaneTimeCollection ?? []
     this.teamRadioPoints = s.TeamRadio ?? []
     this.currentTyrePoints = s.CurrentTyres ?? []
+    this.tyreStintSeriesPoints = s.TyreStintSeries ?? []
     this.tlaRcmPoints = s.TlaRcm ?? []
     this.positionPoints = s.Position ?? []
     this.carDataPoints = s.CarData ?? []
     this.sessionClockPoints = parseSessionClock(s.ExtrapolatedClock ?? [])
-    // Live payloads carry Position inline; archive sessions stream it in later.
-    this.positionsPublished = this.positionPoints.length > 0
     this.lastEnrichmentNotifyAt = 0
     if (!continuing) {
       // Fresh session: REPLACE (not clear) the rolling builds so a superseded
@@ -586,6 +744,12 @@ export class F1LiveProvider implements DataProvider {
       this.lapBuild = newLapBuild()
       this.driverBuild = newDriverBuild()
       this.lapsByDriver = new Map()
+      this.trackPath = []
+      this.trackPathClosed = false
+      this.pitLapIndexCache = undefined
+      this.pitLapIndexPoints = -1
+      this.positionsPublished = false
+      this.resetFeedMemos()
       this.ersBuild = newErsBuild()
       this.ersPoints = []
       this.ersProcessed = 0
@@ -609,25 +773,33 @@ export class F1LiveProvider implements DataProvider {
     }
 
     await yieldToRenderer()
-    if (expectedLoadVersion !== this.sessionLoadVersion) throw new Error('F1 session load was superseded.')
+    if (expectedLoadVersion !== this.sessionLoadVersion)
+      throw new Error('F1 session load was superseded.')
     await this.appendLapHistory(expectedLoadVersion)
-    if (expectedLoadVersion !== this.sessionLoadVersion) throw new Error('F1 session load was superseded.')
+    if (expectedLoadVersion !== this.sessionLoadVersion)
+      throw new Error('F1 session load was superseded.')
     this.timelineCache = this.buildSessionTimeline(this.lapBuild.qualifyingParts)
     await yieldToRenderer()
-    if (expectedLoadVersion !== this.sessionLoadVersion) throw new Error('F1 session load was superseded.')
-    this.trackPath = buildTrackPath(this.positionPoints)
-    // Persist the traced outline (no-op below the minimum length). Live sessions
-    // save too, so FP1's trace seeds FP2 and the race at the same circuit.
-    this.saveTrackPathCache(this.trackPath)
+    if (expectedLoadVersion !== this.sessionLoadVersion)
+      throw new Error('F1 session load was superseded.')
+    // Only ever upgrade the outline to a proven closed lap, except for a fully
+    // downloaded archive payload where the documented open-trace fallback is the
+    // best trace that will ever exist. Live sessions save closed laps too, so
+    // FP1's trace seeds FP2 and the race at the same circuit.
+    const allowOpenPositionFallback =
+      data.summary.path !== 'live' && data.summary.archiveStatus === 'Complete'
+    this.adoptTrackPath(allowOpenPositionFallback)
+    this.publishPositionsIfReady(allowOpenPositionFallback)
     await yieldToRenderer()
-    if (expectedLoadVersion !== this.sessionLoadVersion) throw new Error('F1 session load was superseded.')
-    const newCarData = this.ersProcessed > 0
-      ? this.carDataPoints.slice(this.ersProcessed)
-      : this.carDataPoints
+    if (expectedLoadVersion !== this.sessionLoadVersion)
+      throw new Error('F1 session load was superseded.')
+    const newCarData =
+      this.ersProcessed > 0 ? this.carDataPoints.slice(this.ersProcessed) : this.carDataPoints
     this.ersProcessed = this.carDataPoints.length
     if (newCarData.length > 0) {
       await this.integrateErsBatch(newCarData, expectedLoadVersion)
-      if (expectedLoadVersion !== this.sessionLoadVersion) throw new Error('F1 session load was superseded.')
+      if (expectedLoadVersion !== this.sessionLoadVersion)
+        throw new Error('F1 session load was superseded.')
     }
     // A continuing live poll appends strictly newer points: the forward-merge
     // cursor stays valid and the next snapshot advances incrementally instead
@@ -649,26 +821,38 @@ export class F1LiveProvider implements DataProvider {
     const clock = clamp(t, 0, this.getDuration() || t)
     this.advanceTo(clock)
 
-    const raceControl = collectRaceControl(this.raceControlPoints, clock)
+    const raceControl = this.memoRaceControl.read(this.raceControlPoints, clock, () =>
+      collectRaceControl(this.raceControlPoints, clock)
+    )
     // TopThree independently names the leading drivers, recovering identity for
     // anyone the DriverList keyframe hasn't described yet.
-    const drivers = mergeTopThreeDrivers(this.drivers, this.topThreePoints, clock)
+    const drivers = this.memoDrivers.read(
+      this.topThreePoints,
+      clock,
+      () => mergeTopThreeDrivers(this.drivers, this.topThreePoints, clock),
+      [this.drivers]
+    )
     const timing = buildTiming(this.mergedTiming, this.mergedApp, drivers, raceControl)
-    const currentTyres = buildCurrentTyres(this.currentTyrePoints, clock)
+    const currentTyres = this.memoCurrentTyres.read(this.currentTyrePoints, clock, () =>
+      buildCurrentTyres(this.currentTyrePoints, clock)
+    )
     applyCurrentTyres(timing, currentTyres)
     this.attachErs(timing, clock)
-    const weatherHistory = this.weatherPoints
-      .filter((p) => p.t <= clock)
-      .map((p) => weatherAt(p))
-      .filter((w): w is WeatherSample => w !== null)
+    const weatherHistory = this.memoWeatherHistory.read(this.weatherPoints, clock, () =>
+      this.weatherPoints
+        .filter((p) => p.t <= clock)
+        .map((p) => weatherAt(p))
+        .filter((w): w is WeatherSample => w !== null)
+    )
     const weather = weatherAt(nearestAtOrBefore(this.weatherPoints, clock, (p) => p.t))
     const lc = lapCountAt(nearestAtOrBefore(this.lapCountPoints, clock, (p) => p.t))
     const trackStatus = trackStatusAt(nearestAtOrBefore(this.trackStatusPoints, clock, (p) => p.t))
+    const feedPath = this.currentFeedPath()
     const positions = this.positionsAt(clock, timing)
     const availablePositions = positionAvailability(positions)
 
     const maxLapNo = Math.max(0, ...timing.map((e) => e.lapNumber ?? 0)) || null
-    const currentLap = this.session.type === 'race' ? lc.current ?? maxLapNo : null
+    const currentLap = this.session.type === 'race' ? (lc.current ?? maxLapNo) : null
 
     return {
       session: this.session,
@@ -681,12 +865,29 @@ export class F1LiveProvider implements DataProvider {
       weatherHistory,
       positions,
       trackPath: this.trackPath,
-      lapPositions: buildLapPositions(this.lapSeriesPoints, clock),
-      sessionBests: buildSessionBests(this.timingStatsPoints, clock),
-      pitLaneTimes: collectPitLaneTimes(this.pitLanePoints, clock),
-      teamRadio: collectTeamRadio(this.teamRadioPoints, clock, this.currentFeedPath()),
+      lapPositions: this.memoLapPositions.read(this.lapSeriesPoints, clock, () =>
+        buildLapPositions(this.lapSeriesPoints, clock)
+      ),
+      sessionBests: this.memoSessionBests.read(this.timingStatsPoints, clock, () =>
+        buildSessionBests(this.timingStatsPoints, clock)
+      ),
+      pitLaneTimes: this.memoPitLaneTimes.read(this.pitLanePoints, clock, () =>
+        collectPitLaneTimes(this.pitLanePoints, clock)
+      ),
+      teamRadio: this.memoTeamRadio.read(
+        this.teamRadioPoints,
+        clock,
+        () => collectTeamRadio(this.teamRadioPoints, clock, feedPath),
+        [feedPath]
+      ),
       currentTyres,
-      trackMessage: latestTrackMessage(this.tlaRcmPoints, clock),
+      tyreStintHistory: this.memoTyreStintHistory.read(this.tyreStintSeriesPoints, clock, () =>
+        buildTyreStintHistory(this.tyreStintSeriesPoints, clock)
+      ),
+      feedFreshness: this.session.id === 'live' ? this.computeFeedFreshness() : undefined,
+      trackMessage: this.memoTrackMessage.read(this.tlaRcmPoints, clock, () =>
+        latestTrackMessage(this.tlaRcmPoints, clock)
+      ),
       availability: {
         timing: timing.length > 0,
         laps: this.lapsByDriver.size > 0,
@@ -694,7 +895,7 @@ export class F1LiveProvider implements DataProvider {
         intervals: timing.some((e) => typeof e.intervalAhead === 'number'),
         raceControl: this.raceControlPoints.length > 0,
         weather: this.weatherPoints.length > 0,
-        positions: availablePositions.positions,
+        positions: this.positionsPublished,
         positionProgress: availablePositions.positionProgress,
         telemetry: this.telemetryAvailable,
         live: this.data
@@ -853,9 +1054,7 @@ export class F1LiveProvider implements DataProvider {
   }
 
   private positionsAt(clock: number, timing: TimingEntry[]): PositionSample[] {
-    const entries = this.positionsPublished
-      ? positionCoordinatesAt(this.positionPoints, clock)
-      : {}
+    const entries = this.positionsPublished ? positionCoordinatesAt(this.positionPoints, clock) : {}
     const iso = new Date(clock * 1000).toISOString()
     return timing.map((e) => {
       const p = entries[String(e.driverNumber)]
@@ -1035,7 +1234,10 @@ export class F1LiveProvider implements DataProvider {
           }
           const dt = point.t - (build.lastT.get(dn) ?? point.t) // integrateErs clamps this
           build.lastT.set(dn, point.t)
-          build.states.set(dn, integrateErs(build.states.get(dn) ?? initErsState(), sample, dt))
+          let state = build.states.get(dn) ?? initErsState()
+          // Crossing the line refills the lap's harvest/deployment allowances.
+          state = this.advanceErsLaps(build, dn, point.t, state)
+          build.states.set(dn, integrateErs(state, sample, dt))
           build.lastSample.set(dn, sample)
         }
       }
@@ -1056,6 +1258,34 @@ export class F1LiveProvider implements DataProvider {
     }
   }
 
+  /**
+   * Refill the per-lap ERS allowances for every lap this driver completed at or
+   * before `t`.
+   *
+   * The lap boundary comes from the timing feed (`LapRecord.tComplete`), which
+   * is fully applied before CarData integrates — at ingest `appendLapHistory`
+   * runs first, and during archive enrichment the timing feed finishes before
+   * the `.z` telemetry streams. The cursor only moves forward, so a driver whose
+   * laps arrive later simply refills from wherever the cursor had reached.
+   */
+  private advanceErsLaps(
+    build: ErsBuild,
+    driverNumber: number,
+    t: number,
+    state: ErsDriverState
+  ): ErsDriverState {
+    const laps = this.lapsByDriver.get(driverNumber)
+    if (!laps || laps.length === 0) return state
+    let cursor = build.lapCursor.get(driverNumber) ?? 0
+    let next = state
+    while (cursor < laps.length && laps[cursor].tComplete <= t) {
+      next = startLap(next)
+      cursor++
+    }
+    build.lapCursor.set(driverNumber, cursor)
+    return next
+  }
+
   /** Attach the ERS estimate to each timing entry at session time `clock`. */
   private attachErs(timing: TimingEntry[], clock: number): void {
     if (this.ersPoints.length === 0) return
@@ -1070,6 +1300,12 @@ export class F1LiveProvider implements DataProvider {
       // signal; the public feed does not expose the driver's button press.
       e.deployMode = applyOvertakeEligibility(est.deployMode, e.intervalAhead)
       e.energyIsEstimate = true
+      e.energyConfidence = est.confidence ?? undefined
+      e.energyDeployBudgetPct = est.deployBudgetRemainingPct
+      const trend = deriveEnergyTrend(this.ersPoints, e.driverNumber, clock)
+      e.energyTrend = trend.direction
+      e.energyTrendDeltaPct = trend.deltaPct
+      e.energyDeploymentLimited = est.deploymentLimited
     }
   }
 }
@@ -1084,10 +1320,23 @@ interface ErsBuild {
   lastSample: Map<number, ErsTelemetrySample>
   lastT: Map<number, number>
   lastEmit: number
+  /**
+   * Index of the next not-yet-crossed lap boundary in `lapsByDriver`, per driver.
+   * The ERS budgets refill once per lap, so the integrator needs to know when a
+   * car crossed the line. Kept as a forward-only cursor so a streaming CarData
+   * chunk costs O(new points), never O(laps × points).
+   */
+  lapCursor: Map<number, number>
 }
 
 function newErsBuild(): ErsBuild {
-  return { states: new Map(), lastSample: new Map(), lastT: new Map(), lastEmit: -Infinity }
+  return {
+    states: new Map(),
+    lastSample: new Map(),
+    lastT: new Map(),
+    lastEmit: -Infinity,
+    lapCursor: new Map()
+  }
 }
 
 /** Rolling forward-scan state for the lap-history/qualifying extraction. */

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SessionInfo } from '@shared/models'
 import { dataManager, useSessionStore } from '@renderer/store/sessionStore'
+import { useSyncStore } from '@renderer/store/syncStore'
 
 const SESSION: SessionInfo = {
   id: 'session-a',
@@ -33,6 +34,7 @@ describe('atomic session loading', () => {
   beforeEach(() => {
     dataManager.setActive('demo')
     useSessionStore.getState().pause()
+    useSyncStore.getState().setFollowEligible(false)
     useSessionStore.setState({
       providerId: 'demo',
       sessions: [SESSION],
@@ -102,5 +104,17 @@ describe('atomic session loading', () => {
     await useSessionStore.getState().selectSession('session-a')
 
     expect(useSessionStore.getState().clock).toBe(8)
+  })
+
+  it('invalidates follow eligibility before session loading resolves', async () => {
+    const pending = deferred<SessionInfo>()
+    vi.spyOn(dataManager, 'loadSession').mockReturnValue(pending.promise)
+    useSyncStore.getState().setFollowEligible(true)
+
+    const load = useSessionStore.getState().selectSession('session-a')
+
+    expect(useSyncStore.getState().followEligible).toBe(false)
+    pending.resolve(SESSION)
+    await load
   })
 })

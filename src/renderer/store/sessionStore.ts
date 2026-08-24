@@ -1,7 +1,11 @@
 import { create } from 'zustand'
 import type { LapSample, RaceControlMessage, SessionInfo } from '@shared/models'
 import { DataProviderManager } from '@renderer/core/DataProviderManager'
-import type { ProviderCapabilities, RaceSnapshot, SessionTimeline } from '@renderer/core/providers/types'
+import type {
+  ProviderCapabilities,
+  RaceSnapshot,
+  SessionTimeline
+} from '@renderer/core/providers/types'
 import { clamp } from '@renderer/lib/utils'
 import { useSyncStore } from './syncStore'
 import { useAlertStore } from './alertStore'
@@ -10,6 +14,7 @@ import { useRaceStoryStore } from './raceStoryStore'
 import { useEngineerNotesStore } from './engineerNotesStore'
 import { syncMath } from '@renderer/core/engines/SessionSyncEngine'
 import { shouldPauseAtDataEdge } from '@shared/f1-session-state'
+import { buildRaceBookmarks, type RaceBookmark } from '@renderer/core/engines/RaceBookmarks'
 
 const manager = new DataProviderManager()
 
@@ -20,7 +25,8 @@ let sessionListVersion = 0
 let reloadPromise: Promise<boolean> | null = null
 
 function isKnownLapAtTime(lap: LapSample, dataTime: number, currentLap: number | null): boolean {
-  if (lap.sessionTime != null && Number.isFinite(lap.sessionTime)) return lap.sessionTime <= dataTime
+  if (lap.sessionTime != null && Number.isFinite(lap.sessionTime))
+    return lap.sessionTime <= dataTime
   if (currentLap != null) return lap.lapNumber <= currentLap
   return true
 }
@@ -40,6 +46,8 @@ interface SessionStoreState {
   speed: number
   snapshot: RaceSnapshot | null
   timeline: SessionTimeline | null
+  /** Whole-session clickable markers (start, SC/VSC, pits, lead changes, penalties, radio, fastest lap). */
+  bookmarks: RaceBookmark[]
 
   focusDriver: number | null
   comparison: [number, number] | null
@@ -86,6 +94,7 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
   speed: 1,
   snapshot: null,
   timeline: null,
+  bookmarks: [],
 
   focusDriver: null,
   comparison: null,
@@ -105,7 +114,17 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
     get().pause()
     try {
       const caps = manager.setActive(id)
-      set({ providerId: caps.id, sessions: [], currentSession: null, snapshot: null, timeline: null, loadingSession: false, error: null })
+      set({
+        providerId: caps.id,
+        sessions: [],
+        currentSession: null,
+        snapshot: null,
+        timeline: null,
+        bookmarks: [],
+        loadingSession: false,
+        error: null
+      })
+      useSyncStore.getState().setFollowEligible(false)
       await get().refreshSessions()
     } catch (e) {
       set({ error: (e as Error).message })
@@ -131,6 +150,7 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
     const requestVersion = ++sessionLoadVersion
     const providerId = get().providerId
     get().pause()
+    useSyncStore.getState().setFollowEligible(false)
     set({ loadingSession: true, error: null })
     try {
       const pendingReload = reloadPromise
@@ -143,18 +163,35 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
       useAlertStore.getState().resetEngine()
       useRaceStoryStore.getState().reset()
       useEngineerNotesStore.getState().reset()
-      const startClock = opts?.seekFraction != null
-        ? clamp(opts.seekFraction * duration, 0, duration)
-        : clamp(manager.getInitialClock() + useSyncStore.getState().sync.offsetSeconds, 0, duration)
+      const startClock =
+        opts?.seekFraction != null
+          ? clamp(opts.seekFraction * duration, 0, duration)
+          : clamp(
+              manager.getInitialClock() + useSyncStore.getState().sync.offsetSeconds,
+              0,
+              duration
+            )
+      const timeline = manager.getTimeline()
+      // Bookmarks need the WHOLE session, not the current playhead, so they're
+      // built once here from a full-duration snapshot — never per tick.
+      const bookmarks =
+        duration > 0
+          ? buildRaceBookmarks(manager.getSnapshotAt(duration), timeline?.greenStart ?? null)
+          : []
       set({
         currentSession: session,
         duration,
         clock: startClock,
-        timeline: manager.getTimeline(),
+        timeline,
+        bookmarks,
         loadingSession: false,
         focusDriver: null,
         comparison: null
       })
+      // Following the TOD video only means anything while the data clock IS real
+      // time. Told here rather than from the sync widget, so it stays right even
+      // when that widget is not part of the user's layout.
+      useSyncStore.getState().setFollowEligible(providerId === 'f1live' && session.id === 'live')
       get().recompute()
     } catch (e) {
       if (requestVersion !== sessionLoadVersion || get().providerId !== providerId) return
@@ -176,7 +213,8 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
           requestVersion !== sessionLoadVersion ||
           get().providerId !== providerId ||
           get().currentSession?.id !== cur.id
-        ) return false
+        )
+          return false
         const duration = manager.getDuration()
         set({ duration, timeline: manager.getTimeline() })
         get().recompute()
@@ -269,7 +307,8 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
 
   getDriverLaps: (n) => {
     const dataTime = get().effectiveDataTime()
-    const snapshot = get().snapshot ?? (get().currentSession ? manager.getSnapshotAt(dataTime) : null)
+    const snapshot =
+      get().snapshot ?? (get().currentSession ? manager.getSnapshotAt(dataTime) : null)
     const currentLap = snapshot?.currentLap ?? null
     return manager.getDriverLaps(n).filter((lap) => isKnownLapAtTime(lap, dataTime, currentLap))
   },

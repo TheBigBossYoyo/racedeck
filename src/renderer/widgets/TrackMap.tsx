@@ -1,54 +1,65 @@
-import { memo, useLayoutEffect, useMemo, useRef } from 'react'
+import { useMemo, useRef } from 'react'
 import { Map as MapIcon } from 'lucide-react'
 import { WidgetFrame } from '@renderer/components/ui/WidgetFrame'
 import { EmptyState, Badge } from '@renderer/components/ui/primitives'
 import { useSessionStore } from '@renderer/store/sessionStore'
 import { useSettingsStore } from '@renderer/store/settingsStore'
-import { hexColor } from '@renderer/lib/utils'
-import { calculateBounds, normalizePoint, normalizePoints, type Point } from '@renderer/core/engines/geometry'
-import { AnimationFrameBatch } from '@renderer/lib/AnimationFrameBatch'
+import { formatStaleness, hexColor } from '@renderer/lib/utils'
+import {
+  calculateBounds,
+  normalizePoint,
+  normalizePoints,
+  unionBounds,
+  type Bounds,
+  type Point
+} from '@renderer/core/engines/geometry'
+import { placeTrackMapLabels } from './trackMap/labelLayout'
+import { TrackMapDriverMarker } from './trackMap/TrackMapDriverMarker'
+import { reconcileLivePositions, type PositionTrack } from './trackMap/positionTracking'
+import type { DriverDot } from './trackMap/types'
 
 const CX = 150
 const CY = 100
 const RX = 120
 const RY = 74
-interface DriverDot extends Point {
-  number: number
-  code: string
-  color: string
-  position: number | null
-  isRetired: boolean
-  isInPit: boolean
-  isFastestLap: boolean
-}
+const LIVE_INTERPOLATION_MS = 900
+const LIVE_INTERPOLATION_PERFORMANCE_MS = 1_000
+const REPLAY_INTERPOLATION_MS = 280
+const REPLAY_INTERPOLATION_PERFORMANCE_MS = 620
+/** Position is a ~2 Hz high-rate feed; this many quiet ms means it stopped, not just jittered. */
+const POSITION_STALE_MS = 5_000
+/** Dead-reckoning distance cap: ~5% of the 300x200 viewBox diagonal. */
+const MAX_EXTRAPOLATION_DISTANCE = 0.05 * Math.hypot(300, 200)
 
 interface TrackGeometry {
   bounds: ReturnType<typeof calculateBounds>
   path: string
+  dots: DriverDot[]
 }
-
-interface ActiveDotAnimation {
-  element: SVGGElement
-  from: Point
-  to: Point
-  started: number
-  durationMs: number
-  positionRef: React.MutableRefObject<Point>
-}
-
-const dotAnimations = new AnimationFrameBatch<number, ActiveDotAnimation>((animation, now) => {
-  const progress = Math.min(1, (now - animation.started) / animation.durationMs)
-  const x = animation.from.x + (animation.to.x - animation.from.x) * progress
-  const y = animation.from.y + (animation.to.y - animation.from.y) * progress
-  animation.positionRef.current = { x, y }
-  animation.element.setAttribute('transform', `translate(${x}, ${y})`)
-  return progress < 1
-})
 
 /** progress (0..1) → point on the stylized circuit oval (start/finish at top). */
 function pointAt(progress: number): { x: number; y: number } {
   const angle = progress * Math.PI * 2 - Math.PI / 2
   return { x: CX + RX * Math.cos(angle), y: CY + RY * Math.sin(angle) }
+}
+
+function trackMapAnimationConfig(options: {
+  isLiveSnapshot: boolean
+  performanceMode: boolean
+  playing: boolean
+  reducedMotion: boolean
+}): { animate: boolean; durationMs: number } {
+  const durationMs = options.isLiveSnapshot
+    ? options.performanceMode
+      ? LIVE_INTERPOLATION_PERFORMANCE_MS
+      : LIVE_INTERPOLATION_MS
+    : options.performanceMode
+      ? REPLAY_INTERPOLATION_PERFORMANCE_MS
+      : REPLAY_INTERPOLATION_MS
+  return {
+    animate: !options.reducedMotion && (options.isLiveSnapshot || options.playing),
+    durationMs
+  }
 }
 
 export function TrackMap() {
@@ -60,45 +71,60 @@ export function TrackMap() {
   const performanceMode = useSettingsStore((s) => s.performanceMode)
   const reducedMotion = useSettingsStore((s) => s.theme.reducedMotion)
 
-  const isLive = snapshot?.availability.positions === true
+  const hasCoordinatePositions = snapshot?.availability.positions === true
+  const isLiveSnapshot = snapshot?.availability.live === true
+
+  const trace = snapshot?.trackPath ?? []
+  const traceBounds = useMemo(() => calculateBounds(trace), [trace])
+
+  // Framing is sticky: once the map has been sized to a circuit it never
+  // rescales, so cars move across a fixed picture instead of the picture moving
+  // under them. Cleared when the session (or its traced outline) changes.
+  const frameRef = useRef<{ key: string; bounds: Bounds | null }>({ key: '', bounds: null })
+  // Rolling per-driver velocity, for bounded dead-reckoning through a brief
+  // live position outage (see trackMap/positionTracking.ts).
+  const positionTrackRef = useRef<Map<number, PositionTrack>>(new Map())
 
   const geometry = useMemo<TrackGeometry>(() => {
-    const trace = snapshot?.trackPath ?? []
-    const bounds = calculateBounds(trace)
-    if (!bounds || trace.length < 2) return { bounds, path: '' }
-    const normalized = normalizePoints(trace, bounds, {
-      viewBoxWidth: 300,
-      viewBoxHeight: 200,
-      padding: 15
-    })
-    return { bounds, path: normalized.map((point) => `${point.x},${point.y}`).join(' ') }
-  }, [snapshot?.trackPath])
-
-  const dots = useMemo(() => {
-    if (!snapshot) return []
+    if (!snapshot) return { bounds: null, path: '', dots: [] }
 
     const meta = new Map(snapshot.drivers.map((d) => [d.number, d]))
     const driverDots: DriverDot[] = []
+    let path = ''
 
-    if (isLive) {
-      const currentPoints = snapshot.positions
-        .filter((position) => position.x != null && position.y != null)
-        .map((position) => ({ x: position.x!, y: position.y! }))
-      const currentBounds = geometry.bounds ?? calculateBounds(currentPoints)
+    if (hasCoordinatePositions) {
+      const currentPoints = snapshot.positions.flatMap((position) =>
+        position.x == null || position.y == null ? [] : [{ x: position.x, y: position.y }]
+      )
+
+      const frameKey = `${snapshot.session.id}:${trace.length}`
+      if (frameRef.current.key !== frameKey) {
+        frameRef.current = { key: frameKey, bounds: traceBounds }
+      }
+      // Extend to hold any car outside the traced racing line — a pit lane, a
+      // run-off excursion — rather than drawing it off the edge of the panel.
+      const currentBounds = unionBounds(frameRef.current.bounds, calculateBounds(currentPoints))
+      frameRef.current.bounds = currentBounds
 
       if (currentBounds) {
         const config = { viewBoxWidth: 300, viewBoxHeight: 200, padding: 15 }
+        // The outline MUST be normalized against the very same box as the cars,
+        // or the circuit and the field are drawn in two different frames.
+        if (trace.length >= 2) {
+          path = normalizePoints(trace, currentBounds, config)
+            .map((point) => `${point.x},${point.y}`)
+            .join(' ')
+        }
         const retiredDrivers = new Set(
           snapshot.timing
             .filter((t) => t.retired || t.status === 'RETIRED' || t.status === 'DNF')
             .map((t) => t.driverNumber)
         )
         const inPitDrivers = new Set(
-          snapshot.timing
-            .filter((t) => t.inPit || t.status === 'IN_PIT')
-            .map((t) => t.driverNumber)
+          snapshot.timing.filter((t) => t.inPit || t.status === 'IN_PIT').map((t) => t.driverNumber)
         )
-        const fastestDriver = snapshot.timing.find((entry) => entry.isFastestLap)?.driverNumber ?? null
+        const fastestDriver =
+          snapshot.timing.find((entry) => entry.isFastestLap)?.driverNumber ?? null
 
         for (const p of snapshot.positions) {
           if (p.x == null || p.y == null) continue
@@ -135,8 +161,54 @@ export function TrackMap() {
       }
     }
 
-    return driverDots.sort((a, b) => (b.position ?? 99) - (a.position ?? 99))
-  }, [snapshot, isLive, geometry.bounds])
+    // Dead-reckoning only means anything for a genuinely live, coordinate-mode
+    // map — replay has no "now" to extrapolate towards, and schematic mode has
+    // no x/y velocity to project.
+    const finalDots =
+      isLiveSnapshot && hasCoordinatePositions
+        ? reconcileLivePositions(
+            driverDots,
+            positionTrackRef.current,
+            Date.now(),
+            snapshot.feedFreshness?.Position ?? 0,
+            POSITION_STALE_MS,
+            MAX_EXTRAPOLATION_DISTANCE
+          )
+        : driverDots
+
+    return {
+      bounds: frameRef.current.bounds,
+      path,
+      dots: finalDots.sort((a, b) => (b.position ?? 99) - (a.position ?? 99))
+    }
+  }, [snapshot, hasCoordinatePositions, trace, traceBounds])
+
+  const dots = geometry.dots
+  const favoriteNumbers = useMemo(() => new Set(favorites), [favorites])
+  const labelPlacements = useMemo(
+    () =>
+      new Map(
+        placeTrackMapLabels(
+          dots.map((dot) => ({
+            number: dot.number,
+            code: dot.code,
+            x: dot.x,
+            y: dot.y,
+            position: dot.position,
+            focused: focusDriver === dot.number,
+            favorite: favoriteNumbers.has(dot.number),
+            isFastestLap: dot.isFastestLap
+          }))
+        ).map((placement) => [placement.number, placement])
+      ),
+    [dots, favoriteNumbers, focusDriver]
+  )
+  const animation = trackMapAnimationConfig({
+    isLiveSnapshot,
+    performanceMode,
+    playing,
+    reducedMotion
+  })
 
   if (!snapshot || (!snapshot.availability.positions && !snapshot.availability.positionProgress)) {
     // On a live F1 session, car GPS (Position.z) is gated behind an F1 TV
@@ -159,28 +231,37 @@ export function TrackMap() {
 
   const trackTint =
     snapshot.trackStatus === 'SAFETY_CAR' || snapshot.trackStatus === 'VSC'
-      ? 'rgb(245 158 11)'
+      ? 'rgb(var(--warn))'
       : snapshot.trackStatus === 'RED'
-        ? 'rgb(244 63 94)'
-        : 'rgb(64 70 92)'
+        ? 'rgb(var(--danger))'
+        : 'rgb(var(--fg-subtle))'
+
+  const stale = formatStaleness(snapshot.feedFreshness?.Position, POSITION_STALE_MS)
 
   return (
     <WidgetFrame
       title="Track Map"
       icon={<MapIcon />}
       actions={
-        !isLive ? (
-          <Badge tone="neutral">Schematic</Badge>
-        ) : (
-          <Badge tone="good">Live positions</Badge>
-        )
+        <>
+          {!hasCoordinatePositions ? (
+            <Badge tone="neutral">Schematic</Badge>
+          ) : (
+            <Badge tone="good">Live positions</Badge>
+          )}
+          {stale && (
+            <span title="Position feed has stopped delivering new data">
+              <Badge tone="warn">{stale}</Badge>
+            </span>
+          )}
+        </>
       }
       noPadding
       scroll={false}
     >
       <div className="flex h-full w-full items-center justify-center p-2">
         <svg viewBox="0 0 300 200" className="h-full w-full">
-          {isLive && geometry.path ? (
+          {hasCoordinatePositions && geometry.path ? (
             <polyline
               points={geometry.path}
               fill="none"
@@ -203,21 +284,37 @@ export function TrackMap() {
                 strokeWidth={9}
                 strokeOpacity={0.35}
               />
-              <ellipse cx={CX} cy={CY} rx={RX} ry={RY} fill="none" stroke={trackTint} strokeWidth={1.5} />
+              <ellipse
+                cx={CX}
+                cy={CY}
+                rx={RX}
+                ry={RY}
+                fill="none"
+                stroke={trackTint}
+                strokeWidth={1.5}
+              />
               {/* start/finish */}
-              <line x1={CX} y1={CY - RY - 6} x2={CX} y2={CY - RY + 6} stroke="#E9ECF5" strokeWidth={2} />
+              <line
+                x1={CX}
+                y1={CY - RY - 6}
+                x2={CX}
+                y2={CY - RY + 6}
+                stroke="rgb(var(--fg))"
+                strokeWidth={2}
+              />
             </>
           )}
 
           {dots.map((dot) => (
-            <AnimatedDriverDot
+            <TrackMapDriverMarker
               key={dot.number}
               dot={dot}
               focused={focusDriver === dot.number}
-              favorite={favorites.includes(dot.number)}
-              animate={playing && !reducedMotion}
-              durationMs={performanceMode ? 620 : 280}
+              favorite={favoriteNumbers.has(dot.number)}
+              animate={animation.animate}
+              durationMs={animation.durationMs}
               onFocus={setFocus}
+              labelPlacement={labelPlacements.get(dot.number)}
             />
           ))}
         </svg>
@@ -225,92 +322,3 @@ export function TrackMap() {
     </WidgetFrame>
   )
 }
-
-const AnimatedDriverDot = memo(function AnimatedDriverDot({
-  dot,
-  focused,
-  favorite,
-  animate,
-  durationMs,
-  onFocus
-}: {
-  dot: DriverDot
-  focused: boolean
-  favorite: boolean
-  animate: boolean
-  durationMs: number
-  onFocus: (driverNumber: number) => void
-}) {
-  const groupRef = useRef<SVGGElement>(null)
-  const positionRef = useRef({ x: dot.x, y: dot.y })
-
-  useLayoutEffect(() => {
-    const element = groupRef.current
-    if (!element) return
-    dotAnimations.cancel(dot.number)
-
-    const from = positionRef.current
-    const distance = Math.hypot(dot.x - from.x, dot.y - from.y)
-    if (!animate || distance > 70) {
-      positionRef.current = { x: dot.x, y: dot.y }
-      element.setAttribute('transform', `translate(${dot.x}, ${dot.y})`)
-      return
-    }
-
-    dotAnimations.schedule(dot.number, {
-      element,
-      from: { ...from },
-      to: { x: dot.x, y: dot.y },
-      started: performance.now(),
-      durationMs,
-      positionRef
-    })
-    return () => dotAnimations.cancel(dot.number)
-  }, [dot.number, dot.x, dot.y, animate, durationMs])
-
-  const faded = dot.isRetired || dot.isInPit
-  const radius = focused ? 7 : 5.5
-  return (
-    <g
-      ref={groupRef}
-      onClick={() => onFocus(dot.number)}
-      onKeyDown={(event) => {
-        if (event.key === 'Enter' || event.key === ' ') {
-          event.preventDefault()
-          onFocus(dot.number)
-        }
-      }}
-      role="button"
-      tabIndex={0}
-      aria-label={`${dot.code}, position ${dot.position ?? 'unknown'}${dot.isFastestLap ? ', fastest lap' : ''}`}
-      className="cursor-pointer"
-      style={{
-        opacity: faded && !focused ? 0.4 : 1,
-        transition: 'opacity 300ms ease',
-        willChange: animate ? 'transform' : undefined,
-        outline: 'none'
-      }}
-      transform={`translate(${positionRef.current.x}, ${positionRef.current.y})`}
-    >
-      {(focused || favorite || dot.isFastestLap) && (
-        <circle
-          r={radius + 3}
-          fill="none"
-          stroke={dot.isFastestLap ? 'rgb(168 85 247)' : focused ? 'rgb(34 211 238)' : dot.color}
-          strokeWidth={dot.isFastestLap ? 2 : 1.5}
-        />
-      )}
-      <circle r={radius} fill={dot.color} stroke="#06070b" strokeWidth={1.5} />
-      <text
-        y={-radius - 4}
-        textAnchor="middle"
-        fontSize={8}
-        fontWeight={700}
-        fill={dot.isFastestLap ? '#C084FC' : '#E9ECF5'}
-        className="pointer-events-none select-none"
-      >
-        {dot.code}{dot.isFastestLap ? ' · FL' : ''}
-      </text>
-    </g>
-  )
-})

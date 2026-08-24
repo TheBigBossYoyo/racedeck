@@ -43,10 +43,21 @@ test('loads a real official F1 session without freezing or closing', async () =>
     const coreLoadMs = Date.now() - started
     console.log(`[real-session] core timing ready in ${coreLoadMs}ms`)
 
-    await expect(window.getByText('Live positions', { exact: true })).toBeVisible({ timeout: 180_000 })
-    await expect(window.locator('svg g[role="button"][aria-label*="position "]').first()).toBeVisible()
+    const trackMapPanel = window
+      .getByText('Track Map', { exact: true })
+      .locator('xpath=ancestor::div[contains(@class,"glass")][1]')
+    await expect(trackMapPanel.getByText('Live positions', { exact: true })).toBeVisible({ timeout: 180_000 })
+    const trackPolyline = trackMapPanel.locator('svg polyline').first()
+    await expect(trackPolyline).toBeVisible()
     const mapLoadMs = Date.now() - started
     console.log(`[real-session] track map ready in ${mapLoadMs}ms`)
+
+    const phaseStrip = window.getByTitle('Race phases — click to jump')
+    const phaseStripBox = await phaseStrip.boundingBox()
+    if (!phaseStripBox) throw new Error('Transport phase strip bounding box unavailable.')
+    await phaseStrip.click({ position: { x: phaseStripBox.width * 0.3, y: phaseStripBox.height / 2 } })
+
+    await expect(trackMapPanel.locator('svg g[role="button"][aria-label*="position "]').first()).toBeVisible()
 
     const telemetryDot = window.getByText('TELEM', { exact: true }).locator('xpath=preceding-sibling::span[1]')
     // Fine-grained polling: at 1s intervals the poll itself inflated the

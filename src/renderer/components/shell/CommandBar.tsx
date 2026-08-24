@@ -28,6 +28,7 @@ import { Dialog, DialogContent, DialogTrigger, DialogClose } from '@renderer/com
 import { TransportBar } from './TransportBar'
 import { SessionPicker } from './SessionPicker'
 import { VideoModeIndicator } from './VideoModeIndicator'
+import { SyncHealthIndicator } from './SyncHealthIndicator'
 import { cn } from '@renderer/lib/utils'
 
 export function CommandBar() {
@@ -111,7 +112,13 @@ export function CommandBar() {
       </Button>
       <AddWidgetMenu />
       <SaveLayoutDialog />
-      <Button size="icon" variant="ghost" onClick={resetLayout} title="Reset layout to preset" className="shrink-0">
+      <Button
+        size="icon"
+        variant="ghost"
+        onClick={resetLayout}
+        title="Reset layout to preset"
+        className="shrink-0"
+      >
         <RotateCcw className="h-3.5 w-3.5 shrink-0" />
       </Button>
 
@@ -123,6 +130,7 @@ export function CommandBar() {
       <TransportBar />
 
       <div className="mx-0.5 hidden h-5 w-px shrink-0 bg-hairline/30 xl:block 2xl:mx-1" />
+      <SyncHealthIndicator />
       <VideoModeIndicator />
     </div>
   )
@@ -145,7 +153,10 @@ function FocusDriverPicker() {
           <Crosshair className="h-3.5 w-3.5 shrink-0 text-accent/80" />
           {meta ? (
             <>
-              <span className="h-3 w-[3px] shrink-0 rounded-full" style={{ backgroundColor: hexColor(meta.teamColour) }} />
+              <span
+                className="h-3 w-[3px] shrink-0 rounded-full"
+                style={{ backgroundColor: hexColor(meta.teamColour) }}
+              />
               <span className="text-fg">{meta.code}</span>
             </>
           ) : (
@@ -161,7 +172,9 @@ function FocusDriverPicker() {
           className="z-[100] max-h-[70vh] w-56 animate-fade-in overflow-auto rounded-xl border border-hairline/40 bg-bg-overlay/95 p-1.5 shadow-glass-lg backdrop-blur-xl"
         >
           <div className="flex items-center justify-between px-2 py-1">
-            <span className="text-2xs font-semibold uppercase tracking-widest text-fg-subtle">Focus driver</span>
+            <span className="text-2xs font-semibold uppercase tracking-widest text-fg-subtle">
+              Focus driver
+            </span>
             <button
               onClick={() => pickDriver(null)}
               className="flex items-center gap-0.5 text-2xs text-fg-subtle hover:text-fg"
@@ -180,8 +193,13 @@ function FocusDriverPicker() {
                 className="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-xs outline-none data-[highlighted]:bg-white/5"
               >
                 <span className="tnum w-5 text-center text-2xs text-fg-subtle">{t.position}</span>
-                <span className="h-3.5 w-[3px] rounded-full" style={{ backgroundColor: hexColor(d?.teamColour) }} />
-                <span className={cn('font-bold', active ? 'text-accent' : 'text-fg')}>{d?.code ?? t.driverNumber}</span>
+                <span
+                  className="h-3.5 w-[3px] rounded-full"
+                  style={{ backgroundColor: hexColor(d?.teamColour) }}
+                />
+                <span className={cn('font-bold', active ? 'text-accent' : 'text-fg')}>
+                  {d?.code ?? t.driverNumber}
+                </span>
                 <span className="truncate text-2xs text-fg-subtle">{d?.teamName ?? ''}</span>
                 {active && <Check className="ml-auto h-3.5 w-3.5 text-accent" />}
               </DropdownMenu.Item>
@@ -249,7 +267,9 @@ function AddWidgetMenu() {
                       <span
                         className={cn(
                           'grid h-4 w-4 place-items-center rounded border',
-                          on ? 'border-accent/50 bg-accent/20 text-accent' : 'border-hairline/40 text-transparent'
+                          on
+                            ? 'border-accent/50 bg-accent/20 text-accent'
+                            : 'border-hairline/40 text-transparent'
                         )}
                       >
                         <Check className="h-3 w-3" />

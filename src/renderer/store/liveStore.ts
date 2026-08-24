@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import type { LiveStatus } from '@shared/f1live'
 import { hasBridge, bridge } from '@renderer/lib/ipc'
 import { useSessionStore } from './sessionStore'
+import { useSettingsStore } from './settingsStore'
 
 /**
  * liveStore — orchestrates the LIVE F1 timing connection: the in-app F1 sign-in,
@@ -11,15 +12,21 @@ import { useSessionStore } from './sessionStore'
  * F1LiveProvider via the session store.
  */
 
-const POLL_MS = 4000
+const NORMAL_POLL_MS = 250
+const PERFORMANCE_POLL_MS = 1000
 const EDGE_MARGIN = 2 // stay ~2s behind the very edge so data is complete
 
-let poll: ReturnType<typeof setInterval> | null = null
+let poll: ReturnType<typeof setTimeout> | null = null
 let unsub: (() => void) | null = null
 /** Guard so we load the live session exactly once per connection (idempotent). */
 let liveLoaded = false
 let intentionalDisconnect = false
 let liveLoadVersion = 0
+let pollGeneration = 0
+
+export function getLiveReloadCadenceMs(performanceMode: boolean): number {
+  return performanceMode ? PERFORMANCE_POLL_MS : NORMAL_POLL_MS
+}
 
 export interface LiveNotice {
   tone: 'info' | 'warning' | 'danger'
@@ -75,33 +82,53 @@ interface LiveStoreState {
 }
 
 function stopPoll(): void {
+  pollGeneration++
   if (poll) {
-    clearInterval(poll)
+    clearTimeout(poll)
     poll = null
   }
 }
 
+function shouldPollLiveSession(): boolean {
+  const live = useLiveStore.getState().status
+  const session = useSessionStore.getState()
+  return (
+    live?.state === 'connected' &&
+    live.live &&
+    session.providerId === 'f1live' &&
+    session.currentSession?.id === 'live'
+  )
+}
+
+function scheduleNextPoll(generation: number): void {
+  if (generation !== pollGeneration) return
+  if (!shouldPollLiveSession()) {
+    stopPoll()
+    liveLoaded = false
+    return
+  }
+  if (poll) clearTimeout(poll)
+  const delayMs = getLiveReloadCadenceMs(useSettingsStore.getState().performanceMode)
+  poll = setTimeout(() => {
+    void runPoll(generation)
+  }, delayMs)
+}
+
+async function runPoll(generation: number): Promise<void> {
+  if (generation !== pollGeneration || !shouldPollLiveSession()) return
+  const session = useSessionStore.getState()
+  const updated = await session.reloadSession()
+  if (generation !== pollGeneration) return
+  if (updated) {
+    const currentSession = useSessionStore.getState()
+    if (currentSession.duration > 0) currentSession.seek(Math.max(0, currentSession.duration - EDGE_MARGIN))
+  }
+  scheduleNextPoll(generation)
+}
+
 function startPoll(): void {
   stopPoll()
-  poll = setInterval(() => {
-    const live = useLiveStore.getState().status
-    const s = useSessionStore.getState()
-    if (
-      live?.state !== 'connected' ||
-      !live.live ||
-      s.providerId !== 'f1live' ||
-      s.currentSession?.id !== 'live'
-    ) {
-      stopPoll()
-      liveLoaded = false
-      return
-    }
-    void s.reloadSession().then((updated) => {
-      if (!updated) return
-      const dur = useSessionStore.getState().duration
-      if (dur > 0) useSessionStore.getState().seek(Math.max(0, dur - EDGE_MARGIN))
-    })
-  }, POLL_MS)
+  scheduleNextPoll(pollGeneration)
 }
 
 /**

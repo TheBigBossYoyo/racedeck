@@ -71,3 +71,43 @@ describe('live stream cursors', () => {
     expect(next?.streams.TimingData).toHaveLength(10)
   })
 })
+
+// APP_IMPROVEMENT_ROADMAP.md P1 item 17: prove the retention cap is enforced
+// through real ingestion, not just pre-seeded fixtures (the tests above).
+describe('live retention cap under real ingestion', () => {
+  /** The socket's private ingest path, reached deliberately for this test. */
+  interface SocketIngestInternals {
+    ingest: (topic: string, data: unknown) => void
+    streams: Record<string, { t: number; d: unknown }[]>
+    dropped: Record<string, number>
+    status: { state: string }
+  }
+
+  it('caps a high-rate topic at MAX_TELEMETRY_POINTS as it genuinely grows past it', () => {
+    const sock = new F1LiveSocket()
+    const inner = sock as unknown as SocketIngestInternals
+    inner.status.state = 'connected'
+
+    const OVER_CAP = 20_500
+    for (let i = 0; i < OVER_CAP; i++) inner.ingest('CarData', { i })
+
+    expect(inner.streams.CarData.length).toBeLessThanOrEqual(20_000)
+    expect(inner.dropped.CarData).toBeGreaterThan(0)
+    // Every retained point is a suffix of the real sequence — nothing corrupted mid-trim.
+    const first = inner.streams.CarData[0].d as { i: number }
+    const last = inner.streams.CarData[inner.streams.CarData.length - 1].d as { i: number }
+    expect(last.i).toBe(OVER_CAP - 1)
+    expect(first.i).toBe(OVER_CAP - inner.streams.CarData.length)
+  })
+
+  it('does not cap a topic outside CAPPED_TOPICS even past the same count', () => {
+    const sock = new F1LiveSocket()
+    const inner = sock as unknown as SocketIngestInternals
+    inner.status.state = 'connected'
+
+    for (let i = 0; i < 20_500; i++) inner.ingest('TimingData', { i })
+
+    expect(inner.streams.TimingData.length).toBe(20_500)
+    expect(inner.dropped.TimingData ?? 0).toBe(0)
+  })
+})

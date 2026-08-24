@@ -23,6 +23,18 @@ export function formatSector(seconds: number | null | undefined): string {
   return seconds.toFixed(3)
 }
 
+/**
+ * "STALE 3.2s" once a live feed topic has gone quiet past `thresholdMs`, else
+ * null. `ms` is `RaceSnapshot.feedFreshness[topic]` — undefined/null outside a
+ * live session, where staleness has no meaning (APP_IMPROVEMENT_ROADMAP.md P0
+ * item 5: a smooth interpolated marker must not look current once its source
+ * has actually stopped updating).
+ */
+export function formatStaleness(ms: number | undefined | null, thresholdMs: number): string | null {
+  if (ms == null || ms < thresholdMs) return null
+  return `STALE ${(ms / 1000).toFixed(1)}s`
+}
+
 /** Gap/interval: number → "+1.234", "+1 LAP" preserved, null → "—". */
 export function formatGap(gap: number | '+1 LAP' | null | undefined): string {
   if (gap == null) return '—'

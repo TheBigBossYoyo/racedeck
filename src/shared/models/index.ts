@@ -18,21 +18,9 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 export type SessionType =
-  | 'practice'
-  | 'qualifying'
-  | 'sprint-qualifying'
-  | 'sprint'
-  | 'race'
-  | 'testing'
-  | 'unknown'
+  'practice' | 'qualifying' | 'sprint-qualifying' | 'sprint' | 'race' | 'testing' | 'unknown'
 
-export type TyreCompound =
-  | 'SOFT'
-  | 'MEDIUM'
-  | 'HARD'
-  | 'INTERMEDIATE'
-  | 'WET'
-  | 'UNKNOWN'
+export type TyreCompound = 'SOFT' | 'MEDIUM' | 'HARD' | 'INTERMEDIATE' | 'WET' | 'UNKNOWN'
 
 export type FlagType =
   | 'GREEN'
@@ -47,13 +35,7 @@ export type FlagType =
   | 'BLACK_ORANGE'
   | 'NONE'
 
-export type TrackStatus =
-  | 'CLEAR'
-  | 'YELLOW'
-  | 'VSC'
-  | 'SAFETY_CAR'
-  | 'RED'
-  | 'UNKNOWN'
+export type TrackStatus = 'CLEAR' | 'YELLOW' | 'VSC' | 'SAFETY_CAR' | 'RED' | 'UNKNOWN'
 
 export type DriverStatus =
   | 'RUNNING'
@@ -183,13 +165,32 @@ export interface TimingEntry {
    * Absent (undefined) or false for the demo which uses a proper synthetic model.
    */
   energyIsEstimate?: boolean
+  /**
+   * How far the battery estimate has moved past its seed assumption. 'low' means
+   * the integrator has only just started for this driver and the number still
+   * largely reflects the seed, so the UI should say so rather than present it as
+   * a settled reading. Absent when energyPct is not an estimate.
+   */
+  energyConfidence?: 'low' | 'medium' | 'high'
+  /**
+   * True when this lap's deployment allowance is spent and the car is on the
+   * reserve drain. Lets the UI explain a low, flat battery instead of showing a
+   * bare small number.
+   */
+  energyDeploymentLimited?: boolean
+  /** Direction of recent battery change, from `ErsEstimator.deriveEnergyTrend`. */
+  energyTrend?: 'charging' | 'stable' | 'draining'
+  /** Percentage-point change behind `energyTrend`; undefined without enough history. */
+  energyTrendDeltaPct?: number | null
+  /** Percentage of this lap's deployment allowance still unspent, 0-100. */
+  energyDeployBudgetPct?: number
 }
 
 /**
  * 2026 battery deployment modes. HARVEST recovers (MGU-K under braking/lift),
-   * DEPLOY is normal electrical deployment, BOOST is the driver's manual
-   * deployment control, and OVERTAKE is the separate within-1s overtaking aid
-   * that replaced DRS.
+ * DEPLOY is normal electrical deployment, BOOST is the driver's manual
+ * deployment control, and OVERTAKE is the separate within-1s overtaking aid
+ * that replaced DRS.
  */
 export type EnergyMode = 'HARVEST' | 'BALANCED' | 'DEPLOY' | 'BOOST' | 'OVERTAKE'
 
@@ -241,6 +242,41 @@ export interface Stint {
   /** Estimated degradation slope (s/lap); null if not computable. */
   degradationPerLap: number | null
 }
+
+/**
+ * One stint from F1's own `TyreStintSeries` feed — a direct statement of which
+ * physical tyre set ran, not a reconstruction from lap-count deltas.
+ */
+export interface TyreStintRecord {
+  stintNumber: number
+  compound: TyreCompound
+  /** Whether the set was fitted new, per the feed. */
+  isNew: boolean
+  /** Laps already on the set when this stint began (feed's `StartLaps`). */
+  ageAtStart: number
+  /** The set's cumulative lap count as of the feed's latest report. */
+  totalLaps: number
+}
+
+/** A driver's full tyre-set history for the session, from `TyreStintSeries`. */
+export interface DriverTyreStintHistory {
+  driverNumber: number
+  stints: TyreStintRecord[]
+}
+
+/**
+ * How trustworthy an analytic value is, for a consistent visual language across
+ * the whole app (APP_IMPROVEMENT_ROADMAP.md P0 item 4).
+ *
+ * - `measured`: read directly off a sensor/feed statement of the fact itself
+ *   (e.g. a real pit-lane transit time).
+ * - `feed-derived`: computed from feed data the source states outright, but not
+ *   itself a single sensor reading (e.g. a stint's age from `TyreStintSeries`).
+ * - `modelled`: an estimate produced by one of RaceDeck's own models because the
+ *   feed doesn't expose the underlying quantity (e.g. ERS state of charge).
+ * - `insufficient`: not enough data exists yet to say anything honest.
+ */
+export type DataProvenance = 'measured' | 'feed-derived' | 'modelled' | 'insufficient'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Race control / weather / positions / telemetry
@@ -355,6 +391,36 @@ export interface SyncState {
 export type VideoMode = 'embedded' | 'companion' | 'external' | 'none'
 
 export type Tristate = 'yes' | 'no' | 'unknown'
+
+/**
+ * A reading of the TOD player's clock, taken in the main process.
+ *
+ * This is what makes sync hold by itself. The absolute broadcast delay cannot be
+ * derived from the player — the stream is already tens of seconds behind real
+ * time before it reaches the browser, and no timeline it exposes says by how
+ * much. But CHANGES in the delay are exactly changes in `currentTime` relative
+ * to wall-clock time, which this does expose. So the user calibrates the delay
+ * once, and every pause, rewind, buffer stall or skip after that is measured
+ * rather than re-guessed.
+ */
+export interface VideoPlaybackProbe {
+  /** False when no playing media could be found in the TOD surface. */
+  ok: boolean
+  /** Playhead position within the player's own timeline, in seconds. */
+  currentTime: number
+  paused: boolean
+  /** End of the seekable range — the live edge for a DVR stream. */
+  seekableEnd: number | null
+  /**
+   * Identity of the loaded media. When this changes the playhead belongs to a
+   * different timeline and any anchor taken against the old one is meaningless.
+   */
+  mediaKey: string | null
+  /** `Date.now()` in the main process when the reading was taken. */
+  atMs: number
+  /** Why no reading was available, for the UI to explain. */
+  reason: string | null
+}
 
 export interface VideoModeState {
   mode: VideoMode

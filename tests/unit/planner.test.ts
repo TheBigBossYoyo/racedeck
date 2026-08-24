@@ -88,7 +88,12 @@ function openingLap(
   }
 }
 
-function makeOpeningStintSnapshot(opts: { currentLap: number; stintAge: number; clock: number; laps: LapSample[] }): RaceSnapshot {
+function makeOpeningStintSnapshot(opts: {
+  currentLap: number
+  stintAge: number
+  clock: number
+  laps: LapSample[]
+}): RaceSnapshot {
   const totalLaps = 20
   return {
     session: {
@@ -173,6 +178,9 @@ describe('planRemainingStrategy', () => {
   it('produces a ranked plan whose recommended option is the best', () => {
     expect(plan.available).toBe(true)
     expect(plan.recommended).not.toBeNull()
+    // APP_IMPROVEMENT_ROADMAP.md P1 item 14: the stop-count confidence behind
+    // the rule readout is available once a plan has been computed.
+    expect(['high', 'medium']).toContain(plan.stopConfidence)
     expect(plan.recommended!.deltaSec).toBeCloseTo(0, 5)
     // Alternatives are slower-or-equal and sorted.
     for (const alt of plan.alternatives) expect(alt.deltaSec).toBeGreaterThanOrEqual(0)
@@ -246,7 +254,9 @@ describe('planRemainingStrategy', () => {
     const plan = planRemainingStrategy(early, 1)
 
     expect(plan.available).toBe(true)
-    for (const option of [plan.recommended, ...plan.alternatives].filter((p): p is NonNullable<typeof plan.recommended> => p != null)) {
+    for (const option of [plan.recommended, ...plan.alternatives].filter(
+      (p): p is NonNullable<typeof plan.recommended> => p != null
+    )) {
       if (option.stops === 0) continue
       expect(option.segments[1].startLap - 1).toBeGreaterThanOrEqual(8)
     }
@@ -258,7 +268,9 @@ describe('planRemainingStrategy', () => {
     const dry = {
       ...midRace,
       timing: midRace.timing.map((timing) =>
-        timing.driverNumber === driver ? { ...timing, pitStops: 0, stintAge: Math.max(8, timing.stintAge ?? 0) } : timing
+        timing.driverNumber === driver
+          ? { ...timing, pitStops: 0, stintAge: Math.max(8, timing.stintAge ?? 0) }
+          : timing
       ),
       stints: [
         ...midRace.stints.filter((stint) => stint.driverNumber !== driver),
@@ -294,7 +306,9 @@ describe('planRemainingStrategy', () => {
         dateStart: '2025-05-25T13:00:00Z'
       },
       timing: midRace.timing.map((timing) =>
-        timing.driverNumber === driver ? { ...timing, pitStops: 0, stintAge: Math.max(8, timing.stintAge ?? 0) } : timing
+        timing.driverNumber === driver
+          ? { ...timing, pitStops: 0, stintAge: Math.max(8, timing.stintAge ?? 0) }
+          : timing
       ),
       stints: [
         ...midRace.stints.filter((stint) => stint.driverNumber !== driver),

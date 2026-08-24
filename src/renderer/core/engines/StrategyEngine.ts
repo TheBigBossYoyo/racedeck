@@ -2,12 +2,18 @@ import type {
   LapSample,
   PitLaneTime,
   RaceControlMessage,
-  SessionInfo,
   TimingEntry,
   TyreCompound
 } from '@shared/models'
 import type { RaceSnapshot } from '@renderer/core/providers/types'
 import { compoundModel, driverRecentPace } from './AnalyticsEngine'
+import { estimateFuelCoefficient, fuelCorrect, type FuelCoefficient } from './FuelModel'
+import {
+  buildPitCycleField,
+  classifyCloseTraffic,
+  raceRulesForSession,
+  remainingStopRequirement
+} from './PitCycleModel'
 
 /**
  * StrategyEngine — race strategy intelligence. EVERYTHING it produces is an
@@ -152,8 +158,7 @@ export function estimatePitLoss(laps: LapSample[]): PitLossEstimate | null {
       // and tyre age are held roughly constant across the comparison.
       const nearby = sorted
         .filter(
-          (l) =>
-            isClean(l) && Math.abs(l.lapNumber - inLap.lapNumber) <= PIT_LOSS_REFERENCE_WINDOW
+          (l) => isClean(l) && Math.abs(l.lapNumber - inLap.lapNumber) <= PIT_LOSS_REFERENCE_WINDOW
         )
         .map((l) => l.lapTime as number)
       if (nearby.length < MIN_REFERENCE_LAPS) continue
@@ -224,7 +229,13 @@ export interface PitLaneAnalysis {
   /** Duration at or above which a stop counts as slow. */
   thresholdSec: number
   /** Stops that are genuinely slow, worst first, penalty time already removed. */
-  slow: { driverNumber: number; duration: number; lostSec: number; penaltySec: number; lap: number | null }[]
+  slow: {
+    driverNumber: number
+    duration: number
+    lostSec: number
+    penaltySec: number
+    lap: number | null
+  }[]
   /** How many measured transits were plausible racing stops. */
   sampleSize: number
 }
@@ -240,7 +251,9 @@ export function analysePitLane(
   pitLaneTimes: PitLaneTime[],
   raceControl: RaceControlMessage[] = []
 ): PitLaneAnalysis | null {
-  const plausible = pitLaneTimes.filter((p) => p.duration > 0 && p.duration <= PLAUSIBLE_STOP_MAX_SEC)
+  const plausible = pitLaneTimes.filter(
+    (p) => p.duration > 0 && p.duration <= PLAUSIBLE_STOP_MAX_SEC
+  )
   if (plausible.length < MIN_STOPS_FOR_COMPARISON) return null
   const sorted = plausible.map((p) => p.duration).sort((a, b) => a - b)
   const med = median(sorted)
@@ -340,8 +353,12 @@ export interface PitPrediction {
 
   rejoinGapToLeaderSec: number | null
   projectedPosition: number | null
+  /** Position after accounting for all still-required dry-race stops. */
+  cycleAdjustedPosition: number | null
   /** Positive = positions lost by stopping; negative = positions gained. */
   positionsLost: number | null
+  /** Positive = rejoining worse than the expected required-stop cycle position. */
+  positionsLostVsCycle: number | null
 
   rejoinAhead: RejoinCar | null
   rejoinBehind: RejoinCar | null
@@ -361,6 +378,7 @@ export interface PitPrediction {
   recoveryLaps: number | null
   lapsRemaining: number | null
   degradationSlope: number | null
+  requiredStopsRemaining: number
 
   verdict: PitVerdict
   confidence: 'low' | 'medium' | 'high'
@@ -412,17 +430,46 @@ function currentStintLaps(entry: TimingEntry | undefined, laps: LapSample[]): La
   return sameCompound.slice(-Math.max(0, Math.trunc(stintLaps)))
 }
 
+/**
+ * One clean lap's fuel-corrected time, from `degradationTrend`'s own filtering
+ * (real time, no in/out lap) and correction (`fuelCorrect` when `coeff` is
+ * given). Factored out so a per-lap SPARKLINE can show the exact series behind
+ * the slope instead of re-deriving the same filtering/correction separately.
+ */
+export function fuelCorrectedLapTimes(
+  laps: LapSample[],
+  lastN = 6,
+  coeff?: FuelCoefficient
+): { lapNumber: number; correctedSec: number }[] {
+  return laps
+    .filter((l) => l.lapTime != null && l.lapTime > 0 && !l.isPitOutLap && !l.isPitInLap)
+    .slice(-lastN)
+    .map((l) => ({
+      lapNumber: l.lapNumber,
+      correctedSec: coeff
+        ? fuelCorrect(l.lapTime as number, l.lapNumber, coeff)
+        : (l.lapTime as number)
+    }))
+}
+
 export const StrategyEngine = {
-  /** Linear tyre-deg slope (s/lap) from the last N green laps of a stint. */
-  degradationTrend(laps: LapSample[], lastN = 6): number | null {
-    const clean = laps
-      .filter((l) => l.lapTime != null && l.lapTime > 0 && !l.isPitOutLap && !l.isPitInLap)
-      .slice(-lastN)
+  /**
+   * Linear tyre-deg slope (s/lap) from the last N green laps of a stint.
+   *
+   * Pass `coeff` wherever a snapshot is available: a race car burns off fuel as
+   * the stint runs, which makes later laps faster for reasons that have nothing
+   * to do with the tyre. Uncorrected, that burn (~0.055 s/lap) is subtracted
+   * straight off the measured slope, so a set genuinely losing 0.03 s/lap reads
+   * as IMPROVING and every degradation band lands a step too optimistic.
+   * Omitting `coeff` keeps the raw behaviour for callers holding bare laps.
+   */
+  degradationTrend(laps: LapSample[], lastN = 6, coeff?: FuelCoefficient): number | null {
+    const clean = fuelCorrectedLapTimes(laps, lastN, coeff)
     if (clean.length < 3) return null
     // Simple least-squares slope over lap index.
     const n = clean.length
     const xs = clean.map((_, i) => i)
-    const ys = clean.map((l) => l.lapTime as number)
+    const ys = clean.map((l) => l.correctedSec)
     const meanX = xs.reduce((a, b) => a + b, 0) / n
     const meanY = ys.reduce((a, b) => a + b, 0) / n
     let num = 0
@@ -451,8 +498,7 @@ export const StrategyEngine = {
    * exist — pit loss is a property of the circuit, and 2026 spans 18.3s to 31.3s.
    */
   pitLossFor(snapshot: RaceSnapshot, greenLoss = circuitPitLoss(snapshot).seconds): number {
-    const neutralized =
-      snapshot.trackStatus === 'SAFETY_CAR' || snapshot.trackStatus === 'VSC'
+    const neutralized = snapshot.trackStatus === 'SAFETY_CAR' || snapshot.trackStatus === 'VSC'
     return neutralized ? greenLoss * SC_PIT_LOSS_FACTOR : greenLoss
   },
 
@@ -467,8 +513,7 @@ export const StrategyEngine = {
     greenPitLoss = circuitPitLoss(snapshot).seconds
   ): PitPrediction {
     const code = snapshot.drivers.find((d) => d.number === driverNumber)?.code ?? `#${driverNumber}`
-    const neutralized =
-      snapshot.trackStatus === 'SAFETY_CAR' || snapshot.trackStatus === 'VSC'
+    const neutralized = snapshot.trackStatus === 'SAFETY_CAR' || snapshot.trackStatus === 'VSC'
     const pitLoss = this.pitLossFor(snapshot, greenPitLoss)
     const lapsRemaining =
       snapshot.totalLaps != null && snapshot.currentLap != null
@@ -477,7 +522,12 @@ export const StrategyEngine = {
     const self = snapshot.timing.find((t) => t.driverNumber === driverNumber)
     const boundedLaps = knownLapsAtSnapshot(snapshot, laps)
     const stintLaps = currentStintLaps(self, boundedLaps)
-    const slope = this.degradationTrend(stintLaps)
+    // Fuel-corrected: burn-off makes later stint laps faster for reasons that
+    // are nothing to do with the tyre, and would otherwise flatten the slope.
+    const rawSlope = this.degradationTrend(stintLaps, 6, estimateFuelCoefficient(snapshot))
+    const stopState = self ? remainingStopRequirement(snapshot, self) : null
+    const closeTraffic = self ? classifyCloseTraffic(snapshot, self) : null
+    const slope = closeTraffic?.isCloseTraffic ? null : rawSlope
 
     const base: PitPrediction = {
       driverNumber,
@@ -492,7 +542,9 @@ export const StrategyEngine = {
       underNeutralization: neutralized,
       rejoinGapToLeaderSec: null,
       projectedPosition: null,
+      cycleAdjustedPosition: null,
       positionsLost: null,
+      positionsLostVsCycle: null,
       rejoinAhead: null,
       rejoinBehind: null,
       gapToChaseAheadSec: null,
@@ -505,6 +557,7 @@ export const StrategyEngine = {
       recoveryLaps: pitLoss / FRESH_TYRE_GAIN,
       lapsRemaining,
       degradationSlope: slope,
+      requiredStopsRemaining: stopState?.requiredStopsRemaining ?? 0,
       verdict: 'STAY OUT',
       confidence: 'low',
       rationale: [],
@@ -519,24 +572,30 @@ export const StrategyEngine = {
       return {
         ...base,
         currentPosition: self.position,
+        requiredStopsRemaining: stopState?.requiredStopsRemaining ?? 0,
         reason: 'No numeric gap available yet for this driver — projection needs interval data.'
       }
     }
 
     // Build the field of cars with a known gap-to-leader (road-position basis).
-    const codeOf = (n: number) =>
-      snapshot.drivers.find((d) => d.number === n)?.code ?? `#${n}`
+    const codeOf = (n: number) => snapshot.drivers.find((d) => d.number === n)?.code ?? `#${n}`
     const field = snapshot.timing
       .map((t) => ({ t, g: numericGap(t) }))
       .filter((x): x is { t: TimingEntry; g: number } => x.g != null)
 
     const rejoinGap = gSelf + pitLoss
     const currentPosition = self.position ?? field.filter((x) => x.g < gSelf).length + 1
+    const pitCycleState = buildPitCycleField(snapshot, greenPitLoss, snapshot.timing).byDriver.get(
+      driverNumber
+    )
 
     // Cars that would be ahead of the driver on the road after rejoin.
     const aheadAfter = field.filter((x) => x.t.driverNumber !== driverNumber && x.g < rejoinGap)
     const projectedPosition = aheadAfter.length + 1
     const positionsLost = projectedPosition - currentPosition
+    const cycleAdjustedPosition = pitCycleState?.cycleAdjustedPosition ?? null
+    const positionsLostVsCycle =
+      cycleAdjustedPosition == null ? null : projectedPosition - cycleAdjustedPosition
 
     const toRejoinCar = (x: { t: TimingEntry; g: number }): RejoinCar => ({
       driverNumber: x.t.driverNumber,
@@ -552,8 +611,7 @@ export const StrategyEngine = {
       .filter((x) => x.t.driverNumber !== driverNumber)
       .map(toRejoinCar)
       .sort((a, b) => a.gapToLeader - b.gapToLeader)
-    const rejoinAhead =
-      [...others].filter((c) => c.gapToLeader < rejoinGap).slice(-1)[0] ?? null
+    const rejoinAhead = [...others].filter((c) => c.gapToLeader < rejoinGap).slice(-1)[0] ?? null
     const rejoinBehind = others.find((c) => c.gapToLeader >= rejoinGap) ?? null
     const traffic = others
       .filter((c) => Math.abs(c.relativeToRejoin) <= REJOIN_TRAFFIC_WINDOW)
@@ -564,35 +622,35 @@ export const StrategyEngine = {
     const selfIdx = sorted.findIndex((x) => x.t.driverNumber === driverNumber)
     const carAheadEntry = selfIdx > 0 ? sorted[selfIdx - 1] : null
     const intervalToCarAhead = carAheadEntry ? gSelf - carAheadEntry.g : null
-    const undercutNet =
-      intervalToCarAhead != null ? this.undercutDelta(intervalToCarAhead) : null
+    const undercutNet = intervalToCarAhead != null ? this.undercutDelta(intervalToCarAhead) : null
     const rawUndercutViable = undercutNet != null && undercutNet > 0
     const progressLap = snapshot.currentLap ?? self.lapNumber ?? null
     const currentAge = self.stintAge ?? null
     const meaningfulRaceProgress =
-      progressLap != null ? progressLap >= MIN_GREEN_RACE_PROGRESS_LAP : stintLaps.length >= MIN_GREEN_STINT_AGE_LAPS
+      progressLap != null
+        ? progressLap >= MIN_GREEN_RACE_PROGRESS_LAP
+        : stintLaps.length >= MIN_GREEN_STINT_AGE_LAPS
     const stintOldEnough =
-      currentAge != null ? currentAge >= MIN_GREEN_STINT_AGE_LAPS : stintLaps.length >= MIN_GREEN_STINT_AGE_LAPS
+      currentAge != null
+        ? currentAge >= MIN_GREEN_STINT_AGE_LAPS
+        : stintLaps.length >= MIN_GREEN_STINT_AGE_LAPS
     const enoughRecoveryTime = lapsRemaining == null || lapsRemaining >= MIN_GREEN_RECOVERY_LAPS
     const greenStopWindowOpen = meaningfulRaceProgress && stintOldEnough && enoughRecoveryTime
     const undercutViable = rawUndercutViable && greenStopWindowOpen
     const neutralizedStopWindowOpen =
-      stintOldEnough && enoughRecoveryTime && (positionsLost <= 4 || (slope != null && slope > 0.12))
-    const rules = raceRulesForSession(snapshot.session)
-    const completedStops = self.pitStops ?? 0
-    const wetTyreUsed = snapshot.stints.some(
-      (stint) =>
-        stint.driverNumber === driverNumber &&
-        stint.lapStart <= (snapshot.currentLap ?? Number.MAX_SAFE_INTEGER) &&
-        (stint.tyre.compound === 'INTERMEDIATE' || stint.tyre.compound === 'WET')
-    )
-    const effectiveMinimumStops = wetTyreUsed && rules.minimumPitStops === 1 ? 0 : rules.minimumPitStops
-    const requiredStopsRemaining = Math.max(0, effectiveMinimumStops - completedStops)
+      stintOldEnough &&
+      enoughRecoveryTime &&
+      (positionsLost <= 4 || (slope != null && slope > 0.12))
+    const requiredStopsRemaining = stopState?.requiredStopsRemaining ?? 0
     const ruleWindowUrgent =
       requiredStopsRemaining > 0 &&
       lapsRemaining != null &&
       lapsRemaining <= Math.max(10, requiredStopsRemaining * 8)
-    const onDryTyre = self.compound === 'SOFT' || self.compound === 'MEDIUM' || self.compound === 'HARD'
+    const requiredStopWindowOpen =
+      requiredStopsRemaining > 0 && meaningfulRaceProgress && stintOldEnough
+    const cycleAlignedStop = positionsLostVsCycle != null && positionsLostVsCycle <= 0
+    const onDryTyre =
+      self.compound === 'SOFT' || self.compound === 'MEDIUM' || self.compound === 'HARD'
     const wetTyreNeeded = snapshot.weather?.rainfall === true && onDryTyre
 
     // ── Verdict + rationale ──
@@ -603,7 +661,9 @@ export const StrategyEngine = {
     if (wetTyreNeeded && stintOldEnough) {
       verdict = 'BOX NOW'
       confidence = 'high'
-      rationale.push('Rain is reported while the car is on a dry tyre — switch to a wet-weather compound.')
+      rationale.push(
+        'Rain is reported while the car is on a dry tyre — switch to a wet-weather compound.'
+      )
     } else if (neutralized && neutralizedStopWindowOpen) {
       verdict = 'BOX NOW'
       confidence = 'high'
@@ -615,6 +675,20 @@ export const StrategyEngine = {
         `Pit loss is cheaper under neutralization (~${pitLoss.toFixed(0)}s), but the tyre is too fresh or the rejoin cost is too high to stop now.`
       )
     } else if (
+      requiredStopWindowOpen &&
+      (ruleWindowUrgent || cycleAlignedStop || positionsLostVsCycle != null)
+    ) {
+      verdict = cycleAlignedStop && traffic.length <= 2 ? 'BOX NOW' : 'BOX SOON'
+      confidence = 'medium'
+      rationale.push(stopState?.cycleFactor ?? 'A required stop is still outstanding.')
+      if (cycleAdjustedPosition != null) {
+        rationale.push(
+          cycleAlignedStop
+            ? `Pitting now lands on the expected required-stop cycle (~P${cycleAdjustedPosition}).`
+            : `The required-stop cycle is ~P${cycleAdjustedPosition}; traffic makes this a box-soon call.`
+        )
+      }
+    } else if (
       greenStopWindowOpen &&
       slope != null &&
       slope >= HEAVY_DEGRADATION &&
@@ -622,14 +696,19 @@ export const StrategyEngine = {
     ) {
       verdict = 'BOX NOW'
       confidence = 'high'
-      rationale.push(`Heavy degradation (~+${slope.toFixed(2)}s/lap) with an acceptable rejoin cost — box before the tyre cliff.`)
+      rationale.push(
+        `Heavy degradation (~+${slope.toFixed(2)}s/lap) with an acceptable rejoin cost — box before the tyre cliff.`
+      )
     } else if (undercutViable && traffic.length <= 2) {
       verdict = 'UNDERCUT NOW'
       confidence = intervalToCarAhead! < OVERTAKE_RANGE ? 'high' : 'medium'
       rationale.push(
         `Undercut on ${codeOf(carAheadEntry!.t.driverNumber)} projects to net ~${undercutNet!.toFixed(1)}s — enough to emerge ahead.`
       )
-    } else if (greenStopWindowOpen && (ruleWindowUrgent || (slope != null && slope >= MODERATE_DEGRADATION))) {
+    } else if (
+      greenStopWindowOpen &&
+      (ruleWindowUrgent || (slope != null && slope >= MODERATE_DEGRADATION))
+    ) {
       verdict = 'BOX SOON'
       confidence = ruleWindowUrgent && slope == null ? 'medium' : 'high'
       rationale.push(
@@ -648,15 +727,37 @@ export const StrategyEngine = {
     } else if (greenStopWindowOpen && slope != null && slope >= PREPARE_DEGRADATION) {
       verdict = 'PREPARE'
       confidence = 'medium'
-      rationale.push(`Tyre pace is beginning to fade (~+${slope.toFixed(2)}s/lap) — monitor the next 2–3 laps.`)
+      rationale.push(
+        `Tyre pace is beginning to fade (~+${slope.toFixed(2)}s/lap) — monitor the next 2–3 laps.`
+      )
     } else if (!meaningfulRaceProgress) {
-      rationale.push('Race still too young for a clear-track green-flag stop call on projections alone.')
+      rationale.push(
+        'Race still too young for a clear-track green-flag stop call on projections alone.'
+      )
     } else if (!stintOldEnough) {
-      rationale.push('Current tyre stint is still too fresh — bank a few more laps before forcing the stop window.')
+      rationale.push(
+        'Current tyre stint is still too fresh — bank a few more laps before forcing the stop window.'
+      )
     } else if (!enoughRecoveryTime) {
-      rationale.push('Too few laps remain to recover a clear-track stop unless the race neutralizes.')
+      rationale.push(
+        'Too few laps remain to recover a clear-track stop unless the race neutralizes.'
+      )
     } else {
       rationale.push('Tyres are holding; track position is worth more than a stop right now.')
+      // APP_IMPROVEMENT_ROADMAP.md P1 item 14: "the condition that would flip
+      // STAY OUT to BOX" — the nearest actionable threshold this verdict is
+      // still short of, when a degradation reading exists to compare against.
+      if (slope != null && slope < PREPARE_DEGRADATION) {
+        rationale.push(
+          `Needs ~+${(PREPARE_DEGRADATION - slope).toFixed(2)}s/lap more degradation to trigger a stop call.`
+        )
+      }
+    }
+
+    if (closeTraffic?.isCloseTraffic) {
+      rationale.push(
+        'Following the car ahead within 1.6s — current degradation is traffic-contaminated, so tyre-drop is not actionable yet.'
+      )
     }
 
     if (positionsLost > 0) {
@@ -683,7 +784,9 @@ export const StrategyEngine = {
       currentGapToLeader: gSelf,
       rejoinGapToLeaderSec: rejoinGap,
       projectedPosition,
+      cycleAdjustedPosition,
       positionsLost,
+      positionsLostVsCycle,
       rejoinAhead,
       rejoinBehind,
       gapToChaseAheadSec: rejoinAhead ? rejoinGap - rejoinAhead.gapToLeader : null,
@@ -694,6 +797,7 @@ export const StrategyEngine = {
       undercutNetSec: undercutNet,
       undercutViable,
       recoveryLaps: pitLoss / FRESH_TYRE_GAIN,
+      requiredStopsRemaining,
       verdict,
       confidence,
       rationale
@@ -708,8 +812,7 @@ export const StrategyEngine = {
   ): StrategyInsight[] {
     const insights: StrategyInsight[] = []
     const timing = snapshot.timing
-    const nameOf = (n: number) =>
-      snapshot.drivers.find((d) => d.number === n)?.code ?? `#${n}`
+    const nameOf = (n: number) => snapshot.drivers.find((d) => d.number === n)?.code ?? `#${n}`
 
     // Safety car opportunity — a "cheap stop" window.
     if (snapshot.trackStatus === 'SAFETY_CAR' || snapshot.trackStatus === 'VSC') {
@@ -781,11 +884,19 @@ export const StrategyEngine = {
     }
 
     // Degradation warnings for favorites (or top runners if none).
+    // The fuel fit is a whole-snapshot computation, so derive it once here
+    // rather than per driver inside the loop.
+    const fuelCoeff = estimateFuelCoefficient(snapshot)
     const watch = favorites.length ? favorites : timing.slice(0, 3).map((t) => t.driverNumber)
     for (const num of watch) {
       const entry = timing.find((t) => t.driverNumber === num)
-      const slope = this.degradationTrend(currentStintLaps(entry, knownLapsAtSnapshot(snapshot, lapsByDriver(num))))
-      if (slope != null && slope > 0.12) {
+      const slope = this.degradationTrend(
+        currentStintLaps(entry, knownLapsAtSnapshot(snapshot, lapsByDriver(num))),
+        6,
+        fuelCoeff
+      )
+      const inCloseTraffic = entry != null && classifyCloseTraffic(snapshot, entry).isCloseTraffic
+      if (!inCloseTraffic && slope != null && slope > 0.12) {
         insights.push({
           id: `deg-${num}`,
           kind: 'degradation',
@@ -864,43 +975,15 @@ export function pickTeammate(
 ): number | null {
   const team = teamOf(driverNumber)
   if (!team) return null
-  const mate = timing.find((t) => t.driverNumber !== driverNumber && teamOf(t.driverNumber) === team)
+  const mate = timing.find(
+    (t) => t.driverNumber !== driverNumber && teamOf(t.driverNumber) === team
+  )
   return mate?.driverNumber ?? null
 }
 
 // ── Optimal remaining stint strategy ────────────────────────────────────────────
 
 const DRY_COMPOUNDS: TyreCompound[] = ['SOFT', 'MEDIUM', 'HARD']
-
-export interface RaceStrategyRules {
-  minimumPitStops: number
-  requiresTwoDryCompounds: boolean
-  label: string
-}
-
-/** FIA race-tyre rules that affect deterministic stint-plan legality. */
-export function raceRulesForSession(session: SessionInfo): RaceStrategyRules {
-  if (session.type !== 'race') {
-    return { minimumPitStops: 0, requiresTwoDryCompounds: false, label: 'No race tyre rule' }
-  }
-  const identity = [session.meetingName, session.name, session.circuitName, session.location]
-    .filter((value): value is string => !!value)
-    .join(' ')
-    .toLowerCase()
-  const year = session.year ?? (session.dateStart ? new Date(session.dateStart).getUTCFullYear() : null)
-  if (year === 2025 && identity.includes('monaco')) {
-    return {
-      minimumPitStops: 2,
-      requiresTwoDryCompounds: true,
-      label: 'Monaco 2025: two mandatory stops'
-    }
-  }
-  return {
-    minimumPitStops: 1,
-    requiresTwoDryCompounds: true,
-    label: 'Dry race: two compounds'
-  }
-}
 
 export interface StintSegment {
   compound: TyreCompound
@@ -935,6 +1018,8 @@ export interface RemainingStrategy {
   minimumTotalStops: number
   minimumRemainingStops: number
   ruleLabel: string
+  /** Confidence behind the stop-count read itself (from `remainingStopRequirement`); null before it's known. */
+  stopConfidence: 'high' | 'medium' | null
   recommended: StrategyPlan | null
   alternatives: StrategyPlan[]
   isEstimate: true
@@ -962,7 +1047,7 @@ export function planRemainingStrategy(
 ): RemainingStrategy {
   const liveSnapshot = snapshotWithKnownLaps(snapshot)
   const code = snapshot.drivers.find((d) => d.number === driverNumber)?.code ?? `#${driverNumber}`
-  const base: RemainingStrategy = {
+  let base: RemainingStrategy = {
     available: false,
     reason: null,
     driverNumber,
@@ -974,39 +1059,41 @@ export function planRemainingStrategy(
     minimumTotalStops: 0,
     minimumRemainingStops: 0,
     ruleLabel: 'No race tyre rule',
+    stopConfidence: null,
     recommended: null,
     alternatives: [],
     isEstimate: true
   }
 
-  if (liveSnapshot.session.type !== 'race') return { ...base, reason: 'Stint planning applies to races.' }
+  if (liveSnapshot.session.type !== 'race')
+    return { ...base, reason: 'Stint planning applies to races.' }
   const total = liveSnapshot.totalLaps
   const cur = liveSnapshot.currentLap
   if (total == null || cur == null) return { ...base, reason: 'Race lap count unknown.' }
   const lapsRemaining = Math.max(0, total - cur)
-  if (lapsRemaining < 2) return { ...base, lapsRemaining, reason: 'Too few laps remaining to plan.' }
+  if (lapsRemaining < 2)
+    return { ...base, lapsRemaining, reason: 'Too few laps remaining to plan.' }
   if (liveSnapshot.weather?.rainfall) {
-    return { ...base, lapsRemaining, reason: 'Wet conditions — the dry stint model does not apply.' }
+    return {
+      ...base,
+      lapsRemaining,
+      reason: 'Wet conditions — the dry stint model does not apply.'
+    }
   }
 
   const entry = liveSnapshot.timing.find((t) => t.driverNumber === driverNumber)
   if (!entry) return { ...base, lapsRemaining, reason: 'Driver not in the current classification.' }
   const currentCompound = entry?.compound ?? null
   const currentAge = entry?.stintAge ?? 0
-  const openingStint = (entry?.pitStops ?? 0) === 0
   const rules = raceRulesForSession(liveSnapshot.session)
-  const completedStops = entry?.pitStops ?? 0
-  const wetTyreUsed = liveSnapshot.stints.some(
-    (stint) =>
-      stint.driverNumber === driverNumber &&
-      stint.lapStart <= cur &&
-      (stint.tyre.compound === 'INTERMEDIATE' || stint.tyre.compound === 'WET')
-  )
-  const minimumTotalStops = wetTyreUsed && rules.minimumPitStops === 1 ? 0 : rules.minimumPitStops
-  const minimumRemainingStops = Math.max(0, minimumTotalStops - completedStops)
-  const ruleLabel = wetTyreUsed && rules.minimumPitStops === 1
-    ? 'Wet-weather tyre used: dry compound rule waived'
-    : rules.label
+  const stopState = remainingStopRequirement(liveSnapshot, entry)
+  const openingStint = stopState.completedStops === 0
+  const completedStops = stopState.completedStops
+  const minimumTotalStops = stopState.minimumTotalStops
+  const minimumRemainingStops = stopState.requiredStopsRemaining
+  const ruleLabel = stopState.ruleLabel
+  // Every later `{...base, ...}` return picks this up automatically.
+  base = { ...base, stopConfidence: stopState.confidence }
   if (openingStint && currentAge < MIN_OPENING_STINT_PLAN_AGE) {
     return {
       ...base,
@@ -1058,11 +1145,14 @@ export function planRemainingStrategy(
 
   const candidates = DRY_COMPOUNDS.filter((c) => model.has(c))
   const usesRequiredCompounds = (compounds: TyreCompound[]) =>
-    wetTyreUsed || !rules.requiresTwoDryCompounds || new Set([...used, ...compounds]).size >= 2
+    stopState.wetTyreUsed ||
+    !rules.requiresTwoDryCompounds ||
+    new Set([...used, ...compounds]).size >= 2
 
   const makePlan = (segments: StintSegment[], stops: number): StrategyPlan => {
     const finishTimeSec =
-      segments.reduce((a, s) => a + stintTime(s.compound, s.laps, s.startAge), 0) + stops * greenPitLoss
+      segments.reduce((a, s) => a + stintTime(s.compound, s.laps, s.startAge), 0) +
+      stops * greenPitLoss
     const plan: StrategyPlan = {
       stops,
       segments,
@@ -1079,7 +1169,19 @@ export function planRemainingStrategy(
 
   // 0-stop
   if (currentCompound) {
-    plans.push(makePlan([{ compound: currentCompound, startLap: cur + 1, laps: lapsRemaining, startAge: currentAge }], 0))
+    plans.push(
+      makePlan(
+        [
+          {
+            compound: currentCompound,
+            startLap: cur + 1,
+            laps: lapsRemaining,
+            startAge: currentAge
+          }
+        ],
+        0
+      )
+    )
   }
 
   // 1-stop — try every remaining pit lap × candidate compound.
@@ -1090,7 +1192,12 @@ export function planRemainingStrategy(
     for (const c of candidates) {
       const segments: StintSegment[] = []
       if (currentCompound && seg1Laps > 0) {
-        segments.push({ compound: currentCompound, startLap: cur + 1, laps: seg1Laps, startAge: currentAge })
+        segments.push({
+          compound: currentCompound,
+          startLap: cur + 1,
+          laps: seg1Laps,
+          startAge: currentAge
+        })
       }
       segments.push({ compound: c, startLap: pitLap + 1, laps: seg2Laps, startAge: 0 })
       plans.push(makePlan(segments, 1))
@@ -1106,7 +1213,12 @@ export function planRemainingStrategy(
         for (const c2 of candidates) {
           const segments: StintSegment[] = []
           if (currentCompound) {
-            segments.push({ compound: currentCompound, startLap: cur + 1, laps: p1 - cur, startAge: currentAge })
+            segments.push({
+              compound: currentCompound,
+              startLap: cur + 1,
+              laps: p1 - cur,
+              startAge: currentAge
+            })
           }
           segments.push({ compound: c1, startLap: p1 + 1, laps: p2 - p1, startAge: 0 })
           segments.push({ compound: c2, startLap: p2 + 1, laps: total - p2, startAge: 0 })
@@ -1144,7 +1256,10 @@ export function planRemainingStrategy(
       `${p.stops}:` +
       p.segments.map((s) => s.compound).join('') +
       ':' +
-      p.segments.slice(1).map((s) => Math.round(s.startLap / 3)).join(',')
+      p.segments
+        .slice(1)
+        .map((s) => Math.round(s.startLap / 3))
+        .join(',')
     if (seen.has(sig)) continue
     seen.add(sig)
     ranked.push(p)
@@ -1195,13 +1310,15 @@ export interface PaceBattle {
 /** How much faster/slower a driver is vs the car directly ahead and behind. */
 export function paceComparison(snapshot: RaceSnapshot, driverNumber: number): PaceBattle {
   const liveSnapshot = snapshotWithKnownLaps(snapshot)
-  const code = liveSnapshot.drivers.find((d) => d.number === driverNumber)?.code ?? `#${driverNumber}`
+  const code =
+    liveSnapshot.drivers.find((d) => d.number === driverNumber)?.code ?? `#${driverNumber}`
   const codeOf = (n: number) => liveSnapshot.drivers.find((d) => d.number === n)?.code ?? `#${n}`
   const ordered = [...liveSnapshot.timing]
     .filter((t) => t.position != null)
     .sort((a, b) => (a.position as number) - (b.position as number))
   const idx = ordered.findIndex((t) => t.driverNumber === driverNumber)
-  const self = idx >= 0 ? ordered[idx] : liveSnapshot.timing.find((t) => t.driverNumber === driverNumber)
+  const self =
+    idx >= 0 ? ordered[idx] : liveSnapshot.timing.find((t) => t.driverNumber === driverNumber)
 
   const driverPace = driverRecentPace(liveSnapshot, driverNumber)
   const result: PaceBattle = {

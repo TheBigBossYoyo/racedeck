@@ -6,6 +6,7 @@ import type {
   TeamRadioClip,
   CurrentTyre,
   Driver,
+  DriverTyreStintHistory,
   LapSample,
   RaceControlMessage,
   PositionSample,
@@ -16,6 +17,7 @@ import type {
   TimingEntry,
   TrackStatus,
   TyreCompound,
+  TyreStintRecord,
   WeatherSample,
   DriverStatus
 } from '@shared/models'
@@ -139,12 +141,14 @@ export function driverStints(appLine: unknown): DriverStint[] {
     if (Object.keys(s).length === 0) return []
     const total = numOrNull(s.TotalLaps) ?? 0
     const start = numOrNull(s.StartLaps) ?? 0
-    return [{
-      compound: normalizeCompound(s.Compound as string),
-      ageAtStart: start,
-      totalLaps: total,
-      isNew: String(s.New).toLowerCase() === 'true' || start === 0
-    }]
+    return [
+      {
+        compound: normalizeCompound(s.Compound as string),
+        ageAtStart: start,
+        totalLaps: total,
+        isNew: String(s.New).toLowerCase() === 'true' || start === 0
+      }
+    ]
   })
 }
 
@@ -188,8 +192,7 @@ export function currentStint(appLine: unknown): {
   stops: number
 } {
   const stints = driverStints(appLine)
-  if (stints.length === 0)
-    return { compound: null, age: null, lapsThisStint: null, stops: 0 }
+  if (stints.length === 0) return { compound: null, age: null, lapsThisStint: null, stops: 0 }
   const active = stints[stints.length - 1]
   return {
     compound: active.compound,
@@ -256,12 +259,7 @@ function sectorFrom(raw: unknown): SectorTime {
  * best in purple, and grey only for a sector not yet run this lap — with an
  * `'active'` tint while the car is mid-sector (segments lit, time not posted).
  */
-export type SectorDisplayState =
-  | 'session-best'
-  | 'personal-best'
-  | 'complete'
-  | 'active'
-  | 'none'
+export type SectorDisplayState = 'session-best' | 'personal-best' | 'complete' | 'active' | 'none'
 
 export function sectorDisplayState(sector: SectorTime): SectorDisplayState {
   if (sector.state === 'session-best') return 'session-best'
@@ -269,7 +267,9 @@ export function sectorDisplayState(sector: SectorTime): SectorDisplayState {
   // A posted time this lap that isn't a best → completed (yellow), the race norm.
   if (sector.seconds != null) return 'complete'
   // No time yet, but marshalling segments are lighting up → currently on it.
-  if (sector.segments?.some((s) => s === 'green' || s === 'yellow' || s === 'purple' || s === 'pit')) {
+  if (
+    sector.segments?.some((s) => s === 'green' || s === 'yellow' || s === 'purple' || s === 'pit')
+  ) {
     return 'active'
   }
   return 'none'
@@ -385,52 +385,150 @@ export function buildTiming(
 function applyRaceControlState(entries: TimingEntry[], messages: RaceControlMessage[]): void {
   const byDriver = new Map(entries.map((e) => [e.driverNumber, e]))
   const investigations = new Set<number>()
-  const sanctions = new Map<number, { seconds: number; labels: Set<string> }>()
-  for (const message of messages) {
+  const sanctions = new Map<number, { active: Array<number | 'DT' | 'SG'> }>()
+  const ordered = messages
+    .map((message, index) => ({ message, index }))
+    .sort((a, b) => compareRaceControlMessages(a.message, b.message) || a.index - b.index)
+  for (const { message } of ordered) {
     const text = message.message.toUpperCase()
-    const driverNumber = message.driverNumber ?? extractCarNumber(text)
-    if (driverNumber == null) continue
-    const entry = byDriver.get(driverNumber)
-    if (!entry) continue
+    const driverNumbers = extractDriverNumbers(text, message.driverNumber).filter((driverNumber) =>
+      byDriver.has(driverNumber)
+    )
+    if (driverNumbers.length === 0) continue
 
-    if (text.includes('NO FURTHER ACTION') || text.includes('NOT INVESTIGATED')) {
-      investigations.delete(driverNumber)
-    } else if (text.includes('INVESTIGAT')) {
-      investigations.add(driverNumber)
+    if (isResolvedInvestigationMessage(text)) {
+      driverNumbers.forEach((driverNumber) => investigations.delete(driverNumber))
+    } else if (isActiveInvestigationMessage(text)) {
+      driverNumbers.forEach((driverNumber) => investigations.add(driverNumber))
+    }
+
+    if (text.includes('PENALTY SERVED')) {
+      const penaltySeconds = parseTimePenaltySeconds(text)
+      if (text.includes('DRIVE THROUGH PENALTY')) {
+        driverNumbers.forEach((driverNumber) => retireSanction(sanctions, driverNumber, 'DT'))
+      } else if (isStopGoPenaltyMessage(text)) {
+        driverNumbers.forEach((driverNumber) => retireSanction(sanctions, driverNumber, 'SG'))
+      } else if (penaltySeconds != null) {
+        driverNumbers.forEach((driverNumber) =>
+          retireSanction(sanctions, driverNumber, penaltySeconds)
+        )
+      } else {
+        driverNumbers.forEach((driverNumber) => retireLatestSanction(sanctions, driverNumber))
+      }
+      continue
     }
 
     const penaltySeconds = parseTimePenaltySeconds(text)
     if (penaltySeconds != null) {
-      const sanction = sanctions.get(driverNumber) ?? { seconds: 0, labels: new Set<string>() }
-      sanction.seconds += penaltySeconds
-      sanctions.set(driverNumber, sanction)
-      investigations.delete(driverNumber)
+      driverNumbers.forEach((driverNumber) => {
+        addSanction(sanctions, driverNumber, penaltySeconds)
+        investigations.delete(driverNumber)
+      })
     } else if (text.includes('DRIVE THROUGH PENALTY')) {
-      const sanction = sanctions.get(driverNumber) ?? { seconds: 0, labels: new Set<string>() }
-      sanction.labels.add('DT')
-      sanctions.set(driverNumber, sanction)
-      investigations.delete(driverNumber)
-    } else if (/STOP(?:\s|-)?GO PENALTY/.test(text)) {
-      const sanction = sanctions.get(driverNumber) ?? { seconds: 0, labels: new Set<string>() }
-      sanction.labels.add('SG')
-      sanctions.set(driverNumber, sanction)
-      investigations.delete(driverNumber)
+      driverNumbers.forEach((driverNumber) => {
+        addSanction(sanctions, driverNumber, 'DT')
+        investigations.delete(driverNumber)
+      })
+    } else if (isStopGoPenaltyMessage(text)) {
+      driverNumbers.forEach((driverNumber) => {
+        addSanction(sanctions, driverNumber, 'SG')
+        investigations.delete(driverNumber)
+      })
     }
   }
   for (const entry of entries) {
     entry.underInvestigation = investigations.has(entry.driverNumber)
     const sanction = sanctions.get(entry.driverNumber)
-    if (sanction) {
-      entry.penalty = [sanction.seconds > 0 ? `${sanction.seconds}s` : '', ...sanction.labels]
-        .filter(Boolean)
-        .join(' · ')
-    }
+    if (!sanction) continue
+    const seconds = sanction.active
+      .filter((token): token is number => typeof token === 'number')
+      .reduce((total, value) => total + value, 0)
+    const labels = new Set(
+      sanction.active.filter((token): token is 'DT' | 'SG' => token === 'DT' || token === 'SG')
+    )
+    const penalty = [seconds > 0 ? `${seconds}s` : '', ...labels].filter(Boolean).join(' · ')
+    entry.penalty = penalty.length > 0 ? penalty : null
   }
 }
 
+function compareRaceControlMessages(a: RaceControlMessage, b: RaceControlMessage): number {
+  const aDate = Date.parse(a.date)
+  const bDate = Date.parse(b.date)
+  if (!Number.isNaN(aDate) && !Number.isNaN(bDate) && aDate !== bDate) return aDate - bDate
+  if (a.sessionTime != null && b.sessionTime != null && a.sessionTime !== b.sessionTime)
+    return a.sessionTime - b.sessionTime
+  if (!Number.isNaN(aDate) && Number.isNaN(bDate)) return -1
+  if (Number.isNaN(aDate) && !Number.isNaN(bDate)) return 1
+  return 0
+}
+
+function isResolvedInvestigationMessage(message: string): boolean {
+  return (
+    message.includes('NO FURTHER INVESTIGATION') ||
+    message.includes('NO FURTHER ACTION') ||
+    message.includes('NOT INVESTIGATED')
+  )
+}
+
+function isActiveInvestigationMessage(message: string): boolean {
+  return (
+    /\bNOTED\b/.test(message) ||
+    message.includes('UNDER INVESTIGATION') ||
+    message.includes('WILL BE INVESTIGATED AFTER THE RACE')
+  )
+}
+
+function isStopGoPenaltyMessage(message: string): boolean {
+  return /STOP(?:\s|-)?(?:AND(?:\s|-)?)?GO PENALTY/.test(message)
+}
+
+function addSanction(
+  sanctions: Map<number, { active: Array<number | 'DT' | 'SG'> }>,
+  driverNumber: number,
+  sanction: number | 'DT' | 'SG'
+): void {
+  const state = sanctions.get(driverNumber) ?? { active: [] }
+  state.active.push(sanction)
+  sanctions.set(driverNumber, state)
+}
+
+function retireSanction(
+  sanctions: Map<number, { active: Array<number | 'DT' | 'SG'> }>,
+  driverNumber: number,
+  sanction: number | 'DT' | 'SG'
+): void {
+  const state = sanctions.get(driverNumber)
+  if (!state) return
+  const index = state.active.lastIndexOf(sanction)
+  if (index < 0) return
+  state.active.splice(index, 1)
+  if (state.active.length === 0) sanctions.delete(driverNumber)
+}
+
+function retireLatestSanction(
+  sanctions: Map<number, { active: Array<number | 'DT' | 'SG'> }>,
+  driverNumber: number
+): void {
+  const state = sanctions.get(driverNumber)
+  if (!state) return
+  state.active.pop()
+  if (state.active.length === 0) sanctions.delete(driverNumber)
+}
+
+function extractDriverNumbers(message: string, driverNumber: number | null): number[] {
+  const numbers = new Set<number>()
+  if (driverNumber != null) numbers.add(driverNumber)
+  for (const match of message.matchAll(/\bCAR\s+(\d{1,2})\b/gi)) {
+    numbers.add(Number(match[1]))
+  }
+  for (const match of message.matchAll(/\b(\d{1,2})\s*\([A-Z]{3}\)/gi)) {
+    numbers.add(Number(match[1]))
+  }
+  return [...numbers]
+}
+
 function extractCarNumber(message: string): number | null {
-  const match = /\bCAR\s+(\d{1,2})\b/i.exec(message)
-  return match ? Number(match[1]) : null
+  return extractDriverNumbers(message, null)[0] ?? null
 }
 
 function parseTimePenaltySeconds(message: string): number | null {
@@ -472,7 +570,10 @@ export function trackStatusAt(point: F1StreamPoint | null): TrackStatus {
   return TRACK_STATUS[s] ?? 'CLEAR'
 }
 
-export function lapCountAt(point: F1StreamPoint | null): { current: number | null; total: number | null } {
+export function lapCountAt(point: F1StreamPoint | null): {
+  current: number | null
+  total: number | null
+} {
   if (!point) return { current: null, total: null }
   const d = rec(point.d)
   return { current: numOrNull(d.CurrentLap), total: numOrNull(d.TotalLaps) }
@@ -549,20 +650,35 @@ function stableKey(value: string): string {
   return (hash >>> 0).toString(36)
 }
 
+/**
+ * How far to follow the reference car while looking for a closed lap.
+ *
+ * This is a SEARCH window, not the size of the finished outline — `buildClosedTrackPath`
+ * returns only the prefix that closes. It has to be generous because the car
+ * whose trace is followed may spend its first samples crawling down the pit
+ * lane, sitting in a queue at the end of it, or running an aborted lap. Measured
+ * against real data (Zandvoort qualifying: ~45 m between samples, a 4.26 km lap
+ * ≈ 92 points) this holds roughly seven laps' worth of chances to find one clean
+ * one, at the cost of scanning a few hundred extra points once per session.
+ */
+const TRACK_PATH_MAX_POINTS = 700
+
 /** Build one stable, bounded circuit trace from the decoded Position feed. */
 export function buildTrackPath(
   points: F1StreamPoint[],
-  maxPoints = 400,
+  maxPoints = TRACK_PATH_MAX_POINTS,
   minDistance = 150
 ): { x: number; y: number }[] {
   if (points.length === 0) return []
   const presence = new Map<number, number>()
-  for (const point of points.slice(0, 120)) {
+  // Sample well beyond the opening frames: in practice and qualifying the first
+  // minutes can be an empty track, and the reference car must be one that
+  // actually runs.
+  for (const point of points.slice(0, 600)) {
     const entries = positionEntries(point.d)
     for (const [key, raw] of Object.entries(entries)) {
       if (!/^\d+$/.test(key)) continue
-      const position = rec(raw)
-      if (numOrNull(position.X) == null || numOrNull(position.Y) == null) continue
+      if (!isOnTrackEntry(rec(raw))) continue
       const driverNumber = Number(key)
       presence.set(driverNumber, (presence.get(driverNumber) ?? 0) + 1)
     }
@@ -573,9 +689,9 @@ export function buildTrackPath(
   const path: { x: number; y: number }[] = []
   for (const point of points) {
     const raw = rec(positionEntries(point.d)[String(referenceDriver)])
-    const x = numOrNull(raw.X)
-    const y = numOrNull(raw.Y)
-    if (x == null || y == null) continue
+    if (!isOnTrackEntry(raw)) continue
+    const x = numOrNull(raw.X) as number
+    const y = numOrNull(raw.Y) as number
     const previous = path[path.length - 1]
     if (!previous || Math.hypot(previous.x - x, previous.y - y) > minDistance) {
       path.push({ x, y })
@@ -592,25 +708,45 @@ export function buildTrackPath(
 const MIN_CLOSED_LAP_UNITS = 30_000
 
 /**
- * Build the circuit trace from a PARTIALLY downloaded Position feed, but only
- * once the reference car has demonstrably closed a full lap: the trace must
- * return near its starting point after covering at least a plausible F1 lap
- * distance. Returns null until then, so a partial download can never render a
- * partial circuit. Once accepted, the path is kept for the whole session (the
- * later data only re-traces the same circuit).
+ * ONE lap of the circuit, or null while the reference car has not yet driven one.
+ *
+ * The trace is accepted only once the car has covered a plausible lap distance
+ * AND come back to where it started, so a partial download (or the opening
+ * minutes of a live session) can never render a partial circuit.
+ *
+ * It returns the closed PREFIX, not the whole traced route. Returning everything
+ * meant the outline kept every subsequent lap too — at Zandvoort the search
+ * window holds about seven of them — so the map drew seven slightly different
+ * racing lines on top of each other and the circuit came out as a thick scribble
+ * rather than a line.
  */
 export function buildClosedTrackPath(
   points: F1StreamPoint[],
-  maxPoints = 400,
+  maxPoints = TRACK_PATH_MAX_POINTS,
   minDistance = 150
 ): { x: number; y: number }[] | null {
   const path = buildTrackPath(points, maxPoints, minDistance)
-  const closeDistance = Math.max(1, minDistance * 2)
+  if (path.length < 3) return null
+
+  const steps: number[] = []
+  for (let i = 1; i < path.length; i++) {
+    steps.push(Math.hypot(path[i].x - path[i - 1].x, path[i].y - path[i - 1].y))
+  }
+  // Position samples arrive about once a second, so at racing speed successive
+  // points are ~45 m apart — far more than `minDistance`, which only thins
+  // points that are too CLOSE together. The closure tolerance has to admit that
+  // real spacing, or the trace steps straight over the start/finish line and the
+  // lap is never recognised as closed.
+  const median = [...steps].sort((a, b) => a - b)[steps.length >> 1]
+  const closeDistance = Math.max(minDistance * 2, median * 1.5)
+
   let travelled = 0
   for (let i = 1; i < path.length; i++) {
-    travelled += Math.hypot(path[i].x - path[i - 1].x, path[i].y - path[i - 1].y)
+    travelled += steps[i - 1]
     if (travelled < MIN_CLOSED_LAP_UNITS) continue
-    if (Math.hypot(path[i].x - path[0].x, path[i].y - path[0].y) <= closeDistance) return path
+    if (Math.hypot(path[i].x - path[0].x, path[i].y - path[0].y) <= closeDistance) {
+      return [...path.slice(0, i + 1), path[0]]
+    }
   }
   return null
 }
@@ -619,6 +755,27 @@ export interface PositionCoordinates {
   x: number | null
   y: number | null
   z: number | null
+}
+
+/**
+ * Is this Position entry a car that is actually somewhere on the circuit?
+ *
+ * F1 keeps every car in every Position frame. A car sitting in the garage (or
+ * one the timing loop has lost) is reported as `Status: "OffTrack"` with
+ * `X/Y/Z` all zero. Drawing those verbatim piles most of the field onto a
+ * single point — and, worse, drags the map's bounding box out to include the
+ * origin, so the cars that ARE running get squashed into a corner. That is why
+ * the track map looked broken during a practice or qualifying session, where
+ * most of the grid is in the garage most of the time.
+ */
+function isOnTrackEntry(entry: Record<string, unknown>): boolean {
+  const status = entry.Status
+  if (typeof status === 'string' && status.toLowerCase() === 'offtrack') return false
+  const x = numOrNull(entry.X)
+  const y = numOrNull(entry.Y)
+  if (x == null || y == null) return false
+  // The feed's "no fix" sentinel. A real car is never exactly at the origin.
+  return x !== 0 || y !== 0
 }
 
 /** Interpolate one complete Position frame at an arbitrary replay clock. */
@@ -645,25 +802,39 @@ export function positionCoordinatesAt(
   const next = points[previousIndex + 1] ?? null
   const previousEntries = positionEntries(previous.d)
   const nextEntries = next ? positionEntries(next.d) : {}
-  const fraction = next && next.t > previous.t
-    ? Math.max(0, Math.min(1, (clock - previous.t) / (next.t - previous.t)))
-    : 0
+  const fraction =
+    next && next.t > previous.t
+      ? Math.max(0, Math.min(1, (clock - previous.t) / (next.t - previous.t)))
+      : 0
   const result: Record<string, PositionCoordinates> = {}
 
   for (const [driverNumber, raw] of Object.entries(previousEntries)) {
     if (!/^\d+$/.test(driverNumber)) continue
     const from = rec(raw)
+    // A garaged car has no place on the map — omit it rather than drawing it at
+    // the feed's zero sentinel.
+    if (!isOnTrackEntry(from)) {
+      result[driverNumber] = { x: null, y: null, z: null }
+      continue
+    }
     const to = rec(nextEntries[driverNumber])
+    // Only interpolate towards a frame that is itself a real position; a car
+    // that goes OffTrack next frame must not be dragged towards the origin.
+    const blend = isOnTrackEntry(to) ? fraction : 0
     result[driverNumber] = {
-      x: interpolateCoordinate(numOrNull(from.X), numOrNull(to.X), fraction),
-      y: interpolateCoordinate(numOrNull(from.Y), numOrNull(to.Y), fraction),
-      z: interpolateCoordinate(numOrNull(from.Z), numOrNull(to.Z), fraction)
+      x: interpolateCoordinate(numOrNull(from.X), numOrNull(to.X), blend),
+      y: interpolateCoordinate(numOrNull(from.Y), numOrNull(to.Y), blend),
+      z: interpolateCoordinate(numOrNull(from.Z), numOrNull(to.Z), blend)
     }
   }
   return result
 }
 
-function interpolateCoordinate(from: number | null, to: number | null, fraction: number): number | null {
+function interpolateCoordinate(
+  from: number | null,
+  to: number | null,
+  fraction: number
+): number | null {
   if (from == null) return null
   return to == null ? from : from + (to - from) * fraction
 }
@@ -902,6 +1073,88 @@ export function buildCurrentTyres(points: F1StreamPoint[], tMax: number): Curren
   return out
 }
 
+/** One stint's fields from a merged `TyreStintSeries` driver entry. */
+function tyreStintSeriesStints(driverState: unknown): TyreStintRecord[] {
+  const stints = indexedToArray(driverState)
+  return stints.flatMap((raw, i) => {
+    const s = rec(raw)
+    if (Object.keys(s).length === 0) return []
+    return [
+      {
+        stintNumber: i + 1,
+        compound: normalizeCompound(s.Compound as string),
+        isNew: String(s.New).toLowerCase() === 'true',
+        ageAtStart: numOrNull(s.StartLaps) ?? 0,
+        totalLaps: numOrNull(s.TotalLaps) ?? 0
+      }
+    ]
+  })
+}
+
+/**
+ * Every driver's tyre-set history from F1's own `TyreStintSeries` feed — a
+ * direct statement of which physical set ran each stint, independent of the
+ * stint history reconstructed from `TimingAppData`. Shaped `{Stints: {driver:
+ * {stintIndex: {...}}}}`; deltas patch by index like `LapSeries`/`TimingStats`,
+ * so this merges bounded by `tMax` exactly the same way those do.
+ */
+export function buildTyreStintHistory(
+  points: F1StreamPoint[],
+  tMax: number
+): DriverTyreStintHistory[] {
+  let merged: unknown = {}
+  for (const point of points) {
+    if (point.t > tMax) break
+    merged = deepMergeF1(merged, point.d)
+  }
+  const out: DriverTyreStintHistory[] = []
+  for (const [key, raw] of Object.entries(rec(rec(merged).Stints))) {
+    if (!/^\d+$/.test(key)) continue
+    const stints = tyreStintSeriesStints(raw)
+    if (stints.length === 0) continue
+    out.push({ driverNumber: Number(key), stints })
+  }
+  return out
+}
+
+export interface TyreStintReconciliation {
+  /** The most direct available statement of how the current tyre was fitted. */
+  activeStint: TyreStintRecord | null
+  /** True when TyreStintSeries has nothing yet and the caller must fall back. */
+  inferred: boolean
+  /** True when TyreStintSeries' active compound disagrees with TimingAppData/CurrentTyres. */
+  disagreesWithAppData: boolean
+}
+
+/**
+ * Reconcile a driver's `TyreStintSeries` history against the `TimingAppData`-
+ * derived active stint and `CurrentTyres`' current-tyre statement.
+ *
+ * `TyreStintSeries` is F1's own direct statement of what tyre set ran, so its
+ * active stint wins on disagreement — it is preferred over inference from
+ * TimingAppData/CurrentTyres, never the other way around. Falls back to
+ * `inferred: true` only when TyreStintSeries has not reported anything yet for
+ * this driver (e.g. a live connect made before the feed's first keyframe).
+ */
+export function reconcileTyreHistory(
+  history: DriverTyreStintHistory | undefined,
+  appDataActive: { compound: TyreCompound | null; age: number | null },
+  currentTyre: CurrentTyre | undefined
+): TyreStintReconciliation {
+  const activeStint =
+    history && history.stints.length > 0 ? history.stints[history.stints.length - 1] : null
+  if (!activeStint) return { activeStint: null, inferred: true, disagreesWithAppData: false }
+
+  const appCompound = appDataActive.compound
+  const currentCompound = currentTyre?.compound ?? null
+  const disagreesWithAppData =
+    (appCompound != null && appCompound !== 'UNKNOWN' && appCompound !== activeStint.compound) ||
+    (currentCompound != null &&
+      currentCompound !== 'UNKNOWN' &&
+      currentCompound !== activeStint.compound)
+  return { activeStint, inferred: false, disagreesWithAppData }
+}
+
 /** Latest short race-control ticker line (`TlaRcm`), e.g. "CLEAR IN TRACK SECTOR 12". */
 export function latestTrackMessage(points: F1StreamPoint[], tMax: number): string | null {
   let message: string | null = null
@@ -971,8 +1224,7 @@ export function mergeTopThreeDrivers(
       firstName: (line.FirstName as string) ?? null,
       lastName: (line.LastName as string) ?? null,
       fullName:
-        (line.FullName as string) ??
-        `${line.FirstName ?? ''} ${line.LastName ?? ''}`.trim(),
+        (line.FullName as string) ?? `${line.FirstName ?? ''} ${line.LastName ?? ''}`.trim(),
       broadcastName: (line.BroadcastName as string) ?? null,
       teamName,
       teamColour: (line.TeamColour as string) ?? (teamName ? teamColorFor(teamName) : null),

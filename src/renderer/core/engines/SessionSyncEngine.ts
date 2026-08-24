@@ -62,6 +62,32 @@ export interface SyncCandidate {
   category: string
 }
 
+/**
+ * The one candidate confident enough to apply without asking.
+ *
+ * Marking an event used to hand back a list to choose from even when the choice
+ * was obvious, which made the quickest possible sync — see a safety car, press a
+ * button — into a three-step decision. A match is taken automatically only when
+ * it is both plausibly recent and clearly better than the runner-up; anything
+ * ambiguous still goes to the list, because guessing wrong here silently
+ * mis-times the whole dashboard.
+ *
+ * `maxDistance` is generous because before the first calibration the dashboard's
+ * idea of "now" is the live edge, so the true event sits a whole broadcast delay
+ * away. `minSeparation` is what makes the pick unambiguous: two eligible events
+ * close together (a yellow flag and its clearing, say) fall back to the list.
+ */
+export function bestCandidate(
+  candidates: SyncCandidate[],
+  maxDistance = 180,
+  minSeparation = 25
+): SyncCandidate | null {
+  const [first, second] = candidates
+  if (!first || first.distance > maxDistance) return null
+  if (second && second.distance - first.distance < minSeparation) return null
+  return first
+}
+
 export function candidatesForDisplay(
   candidates: SyncCandidate[],
   showAll: boolean,
