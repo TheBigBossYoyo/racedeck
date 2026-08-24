@@ -29,7 +29,9 @@ vi.mock('@renderer/store/persist', () => ({
   }
 }))
 
-import { F1LiveProvider } from '@renderer/core/providers/F1LiveProvider'
+import { F1LiveProvider, TRACK_PATH_CACHE_SCHEMA_VERSION } from '@renderer/core/providers/F1LiveProvider'
+
+const TRACK_PATH_KEY = `trackpaths:v${TRACK_PATH_CACHE_SCHEMA_VERSION}/2026/Test_Grand_Prix`
 import { DataProviderManager } from '@renderer/core/DataProviderManager'
 
 const archive: F1SessionData = {
@@ -446,14 +448,14 @@ describe('F1 provider session boundaries', () => {
     // it must not wait for the whole Position download.
     await vi.waitFor(() => expect(carDataRequested).toBe(true))
     // Closing a lap persists the circuit outline under the meeting key.
-    await vi.waitFor(() => expect(storeMem.get('trackpaths:2026/Test_Grand_Prix')).toBeDefined())
+    await vi.waitFor(() => expect(storeMem.get(TRACK_PATH_KEY)).toBeDefined())
     provider.cancelPendingLoads()
   })
 
   it('publishes the map from the first chunk when the weekend outline is cached', async () => {
     // A previously-proven outline for this meeting lives in the store.
     const cachedPath = exactClosedCachedPath()
-    storeMem.set('trackpaths:2026/Test_Grand_Prix', cachedPath)
+    storeMem.set(TRACK_PATH_KEY, cachedPath)
 
     let positionChunks = 0
     ipc.loadSessionEnrichment.mockImplementation(
@@ -507,7 +509,7 @@ describe('F1 provider session boundaries', () => {
   })
 
   it('rejects a legacy open cached outline until Position enrichment rebuilds an exact closure', async () => {
-    storeMem.set('trackpaths:2026/Test_Grand_Prix', legacyOpenCachedPath())
+    storeMem.set(TRACK_PATH_KEY, legacyOpenCachedPath())
 
     let positionChunks = 0
     ipc.loadSessionEnrichment.mockImplementation(
@@ -567,7 +569,7 @@ describe('F1 provider session boundaries', () => {
   it('clears the prior session track outline at a fresh-session boundary', async () => {
     const cachedPath = exactClosedCachedPath()
     const nextSession = archiveSession('2026/Other_Grand_Prix/2026-01-02_Race/', {})
-    storeMem.set('trackpaths:2026/Test_Grand_Prix', cachedPath)
+    storeMem.set(TRACK_PATH_KEY, cachedPath)
     ipc.loadSession.mockResolvedValueOnce(archive).mockResolvedValueOnce(nextSession)
     const provider = new F1LiveProvider()
 
@@ -908,7 +910,7 @@ describe('F1 provider live track outline', () => {
 
     expect(provider.getSnapshotAt(19).trackPath).toEqual([])
     // …and nothing partial is written to the weekend's outline cache.
-    expect(storeMem.get('trackpaths:2026/Test_Grand_Prix')).toBeUndefined()
+    expect(storeMem.get(TRACK_PATH_KEY)).toBeUndefined()
   })
 
   it('adopts and caches the outline once the lap closes', async () => {
@@ -917,7 +919,7 @@ describe('F1 provider live track outline', () => {
     await provider.loadSession('live')
 
     expect(provider.getSnapshotAt(60).trackPath.length).toBeGreaterThan(20)
-    expect(storeMem.get('trackpaths:2026/Test_Grand_Prix')).toBeDefined()
+    expect(storeMem.get(TRACK_PATH_KEY)).toBeDefined()
   })
 
   it('keeps a cached outline instead of replacing it with a partial live trace', async () => {
@@ -925,7 +927,7 @@ describe('F1 provider live track outline', () => {
     // data had arrived, so the weekend's proven outline — loaded moments earlier
     // — was overwritten by a fragment on the very next poll.
     const cached = exactClosedCachedPath()
-    storeMem.set('trackpaths:2026/Test_Grand_Prix', cached)
+    storeMem.set(TRACK_PATH_KEY, cached)
     ipc.getLive.mockResolvedValue(liveWithArc(1, 15))
 
     const provider = new F1LiveProvider()
@@ -936,6 +938,19 @@ describe('F1 provider live track outline', () => {
     ipc.getLive.mockResolvedValue(liveWithArc(1, 25))
     await provider.loadSession('live')
     expect(provider.getSnapshotAt(24).trackPath).toEqual(cached)
-    expect(storeMem.get('trackpaths:2026/Test_Grand_Prix')).toEqual(cached)
+    expect(storeMem.get(TRACK_PATH_KEY)).toEqual(cached)
+  })
+
+  it('treats an entry under the unversioned (pre-schema) key as a miss, not a read of stale-shaped data', async () => {
+    // APP_IMPROVEMENT_ROADMAP.md P2 item 32: a cache-shape change must
+    // invalidate old entries instead of silently misreading them.
+    storeMem.set('trackpaths:2026/Test_Grand_Prix', exactClosedCachedPath())
+    ipc.getLive.mockResolvedValue(liveWithArc(1, 20))
+
+    const provider = new F1LiveProvider()
+    await provider.loadSession('live')
+
+    expect(provider.getSnapshotAt(19).trackPath).toEqual([])
+    expect(provider.getDiagnostics().trackPathCacheStatus).toBe('miss')
   })
 })

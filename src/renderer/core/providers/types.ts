@@ -120,6 +120,20 @@ export interface DataProvider {
   /** Invalidate provider-local asynchronous work when switching sources. */
   cancelPendingLoads?(): void
   dispose?(): void
+  /** Cache/enrichment status for a diagnostics surface. Absent providers show "N/A". */
+  getDiagnostics?(): ProviderDiagnostics
+}
+
+/**
+ * Session-level cache/enrichment visibility (APP_IMPROVEMENT_ROADMAP.md P2
+ * item 32) — so an invalidation or a slow rebuild is visible instead of
+ * silently doing work that reads as a freeze.
+ */
+export interface ProviderDiagnostics {
+  trackPathCacheStatus: 'hit' | 'miss' | 'unavailable'
+  cacheSchemaVersion: number
+  enrichmentProcessedPoints: number
+  enrichmentIssue: string | null
 }
 
 /** Empty availability with everything off — a safe default. */

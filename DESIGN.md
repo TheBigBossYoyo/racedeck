@@ -74,7 +74,9 @@ The timing tower, driver dossier, and strategy panels pack many numbers into a s
 
 - Interactive SVG elements (e.g. `TrackMapDriverMarker`) carry `role="button"`, `tabIndex={0}`, `onKeyDown` (Enter/Space), and a descriptive `aria-label` built from the actual state (driver code, position, fastest-lap/estimated-position flags) — this is the baseline for any new clickable non-`<button>` element, not an aspiration.
 - Focus-visible rings are explicit (`group-focus-visible:opacity-100` pattern), not relying on browser default outlines, since the glass panel backgrounds can make default outlines hard to see.
-- Color is never the *only* encoding for a state that matters (tyre compound always shows its letter, not just a color; degradation/condition bands show a label, not just a tone).
+- Color is never the *only* encoding for a state that matters (tyre compound always shows its letter, not just a color; degradation/condition bands show a label, not just a tone; `TimingTower`'s sector-time boxes pair each state with a distinct fill/ring pattern, not just a hue, and carry `role="img"` + `aria-label`).
+- Every `WidgetFrame` panel carries `role="region"`, `aria-label` (its title), and `tabIndex={0}` with a visible focus ring — dense widgets are Tab-navigable, not just clickable.
+- Global keyboard shortcuts (`useKeyboardShortcuts.ts`) are the baseline navigation surface, not an aspiration: `Space`/`K` play-pause, `←`/`→` (`J`/`L`) seek, `+`/`-` sync offset, `1`-`6` workspace layout, `E` edit mode, `N`/`Shift+N` next/previous bookmark, `I`/`Shift+I` next/previous incident (red flag/SC/VSC/penalty), `[`/`]` cycle focused driver, `D` open the Driver Dossier. There is no "pin/unpin" concept in `layoutStore.ts` to attach a shortcut to — not invented here.
 
 ## Accepted debt
 

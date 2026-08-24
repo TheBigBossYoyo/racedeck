@@ -30,8 +30,12 @@ export function WidgetFrame({
 }) {
   return (
     <div
+      role="region"
+      aria-label={title}
+      tabIndex={0}
       className={cn(
         'glass relative flex h-full w-full flex-col overflow-hidden rounded-2xl',
+        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60',
         accent && 'accent-top',
         className
       )}

@@ -1,11 +1,108 @@
-import { Bell, ShieldCheck, ShieldOff, Database, Flag, Radio, Minus, Plus } from 'lucide-react'
+import { Bell, ShieldCheck, ShieldOff, Database, Flag, Radio, Minus, Plus, AlertTriangle } from 'lucide-react'
+import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import { useSessionStore } from '@renderer/store/sessionStore'
 import { useAlertStore } from '@renderer/store/alertStore'
 import { useAppStore } from '@renderer/store/appStore'
 import { useSyncStore } from '@renderer/store/syncStore'
+import { useLiveStore } from '@renderer/store/liveStore'
 import { Tooltip } from '@renderer/components/ui/controls'
 import { formatDuration, formatOffset } from '@renderer/lib/utils'
 import { cn } from '@renderer/lib/utils'
+import { buildSystemStatus, type SystemStatusEntry } from '@renderer/core/engines/SystemStatus'
+import { recalibrateNow } from '@renderer/components/shell/SyncHealthIndicator'
+
+const SEVERITY_TONE: Record<SystemStatusEntry['severity'], string> = {
+  info: 'text-fg-muted',
+  warning: 'text-warn',
+  danger: 'text-danger'
+}
+
+function runRecoveryAction(id: SystemStatusEntry['recoveryActionId']): void {
+  switch (id) {
+    case 'sign-in':
+      useLiveStore.getState().openLogin()
+      break
+    case 'reconnect':
+      void useLiveStore.getState().connect()
+      break
+    case 'recalibrate-sync':
+      recalibrateNow()
+      break
+    case 'retry-session':
+      void useSessionStore.getState().reloadSession()
+      break
+  }
+}
+
+const RECOVERY_LABEL: Record<NonNullable<SystemStatusEntry['recoveryActionId']>, string> = {
+  'sign-in': 'Sign in',
+  reconnect: 'Reconnect',
+  'recalibrate-sync': 'Recalibrate sync',
+  'retry-session': 'Retry'
+}
+
+/** Unified error/recovery panel (APP_IMPROVEMENT_ROADMAP.md P2 item 28). */
+function IssuesIndicator() {
+  const sessionError = useSessionStore((s) => s.error)
+  const liveStatus = useLiveStore((s) => s.status)
+  const loggedIn = useLiveStore((s) => s.loggedIn)
+  const follow = useSyncStore((s) => s.follow)
+  const info = useAppStore((s) => s.info)
+  const getDiagnostics = useSessionStore((s) => s.getDiagnostics)
+
+  const entries = buildSystemStatus({
+    sessionError,
+    liveStatus,
+    loggedIn,
+    followStatus: follow.status,
+    followDetail: follow.detail,
+    drmCapable: info?.drmCapable ?? false,
+    drmReady: info?.drmReady ?? false,
+    enrichmentIssue: getDiagnostics()?.enrichmentIssue ?? null
+  })
+
+  if (entries.length === 0) return null
+
+  return (
+    <DropdownMenu.Root>
+      <DropdownMenu.Trigger asChild>
+        <button className="no-drag flex items-center gap-1" title={`${entries.length} active issue${entries.length === 1 ? '' : 's'}`}>
+          <AlertTriangle className="h-3 w-3 text-warn" />
+          <span className="text-warn">{entries.length} issue{entries.length === 1 ? '' : 's'}</span>
+        </button>
+      </DropdownMenu.Trigger>
+      <DropdownMenu.Portal>
+        <DropdownMenu.Content
+          align="end"
+          sideOffset={6}
+          className="z-[100] w-80 animate-fade-in space-y-2 rounded-xl border border-hairline/40 bg-bg-overlay/95 p-2.5 shadow-glass-lg backdrop-blur-xl"
+        >
+          {entries.map((entry, i) => (
+            <div key={i} className="rounded-lg border border-hairline/20 bg-white/[0.02] p-2">
+              <div className="flex items-center justify-between gap-2">
+                <span className={cn('text-[10px] font-semibold uppercase tracking-wide', SEVERITY_TONE[entry.severity])}>
+                  {entry.category}
+                </span>
+                {entry.recoveryActionId && (
+                  <button
+                    className="rounded-md border border-hairline/30 px-1.5 py-0.5 text-2xs text-fg-muted transition-colors hover:border-accent/50 hover:text-fg"
+                    onClick={() => runRecoveryAction(entry.recoveryActionId)}
+                  >
+                    {RECOVERY_LABEL[entry.recoveryActionId]}
+                  </button>
+                )}
+              </div>
+              <p className="mt-1 text-2xs leading-snug text-fg">{entry.message}</p>
+              {entry.whatStillWorks && (
+                <p className="mt-0.5 text-2xs leading-snug text-fg-subtle">{entry.whatStillWorks}</p>
+              )}
+            </div>
+          ))}
+        </DropdownMenu.Content>
+      </DropdownMenu.Portal>
+    </DropdownMenu.Root>
+  )
+}
 
 /** Always-visible fine-tune control for the dashboard's effective data clock. */
 function StreamSyncChip() {
@@ -111,6 +208,7 @@ export function StatusBar() {
       )}
 
       <div className="ml-auto flex shrink-0 items-center gap-2 2xl:gap-3">
+        <IssuesIndicator />
         <StreamSyncChip />
         <div className="h-3 w-px bg-hairline/30" />
         <div className="flex items-center gap-1">

@@ -4,6 +4,9 @@ import { useSyncStore } from '@renderer/store/syncStore'
 import { useLayoutStore } from '@renderer/store/layoutStore'
 import { useAppStore } from '@renderer/store/appStore'
 import { LAYOUT_ORDER } from '@renderer/core/engines/LayoutManager'
+import { pickDriver } from '@renderer/lib/useFocusDriver'
+
+const INCIDENT_BOOKMARK_KINDS = new Set(['red-flag', 'safety-car', 'vsc', 'penalty'])
 
 /**
  * Global keyboard shortcuts.
@@ -14,6 +17,9 @@ import { LAYOUT_ORDER } from '@renderer/core/engines/LayoutManager'
  *   1–6              switch workspace layout
  *   E                toggle edit (drag/resize) mode
  *   N / Shift+N      jump to next / previous bookmark (SC, pits, radio, ...)
+ *   I / Shift+I      jump to next / previous incident (red flag, SC, VSC, penalty)
+ *   [ / ]            focus the previous / next driver by position
+ *   D                open the Driver Dossier widget (adds it if not present)
  *
  * Shortcuts are suppressed while typing in inputs or when an interactive
  * control (button/menu/slider) owns focus, so they never fight the UI.
@@ -88,6 +94,37 @@ export function useKeyboardShortcuts(): void {
           if (target) session.seek(target.t)
           break
         }
+        case 'i':
+        case 'I': {
+          const incidents = session.bookmarks.filter((b) => INCIDENT_BOOKMARK_KINDS.has(b.kind))
+          if (incidents.length === 0) break
+          const clock = session.clock
+          const target = e.shiftKey
+            ? [...incidents].reverse().find((b) => b.t < clock - 0.5)
+            : incidents.find((b) => b.t > clock + 0.5)
+          if (target) session.seek(target.t)
+          break
+        }
+        case '[':
+        case ']': {
+          const timing = session.snapshot?.timing
+          if (!timing || timing.length === 0) break
+          const ordered = [...timing].sort((a, b) => (a.position ?? 99) - (b.position ?? 99))
+          const currentIndex = ordered.findIndex((t) => t.driverNumber === session.focusDriver)
+          const delta = e.key === ']' ? 1 : -1
+          const nextIndex =
+            currentIndex === -1
+              ? delta === 1
+                ? 0
+                : ordered.length - 1
+              : (currentIndex + delta + ordered.length) % ordered.length
+          pickDriver(ordered[nextIndex].driverNumber)
+          break
+        }
+        case 'd':
+        case 'D':
+          useLayoutStore.getState().addWidget('driver-dossier')
+          break
         case '1':
         case '2':
         case '3':

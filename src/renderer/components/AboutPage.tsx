@@ -1,8 +1,12 @@
-import { Zap, ShieldCheck, Github, Database, Scale } from 'lucide-react'
+import { Zap, ShieldCheck, Github, Database, Scale, Gauge } from 'lucide-react'
 import { useAppStore } from '@renderer/store/appStore'
+import { useSessionStore } from '@renderer/store/sessionStore'
 
 export function AboutPage() {
   const info = useAppStore((s) => s.info)
+  const getDiagnostics = useSessionStore((s) => s.getDiagnostics)
+  const currentSession = useSessionStore((s) => s.currentSession)
+  const diagnostics = getDiagnostics()
 
   return (
     <div className="min-h-0 flex-1 overflow-auto">
@@ -86,6 +90,44 @@ export function AboutPage() {
             <Github className="h-3.5 w-3.5" /> RaceDeck — built as a next-generation race companion.
           </div>
         </div>
+
+        {currentSession && (
+          <div className="glass rounded-2xl p-4">
+            <div className="mb-2 flex items-center gap-2">
+              <Gauge className="h-4 w-4 text-accent" />
+              <h2 className="text-sm font-semibold text-fg">Session diagnostics</h2>
+            </div>
+            {diagnostics ? (
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                {[
+                  [
+                    'Track path cache',
+                    diagnostics.trackPathCacheStatus === 'hit'
+                      ? 'hit'
+                      : diagnostics.trackPathCacheStatus === 'miss'
+                        ? 'rebuilt'
+                        : 'n/a'
+                  ],
+                  ['Cache schema', `v${diagnostics.cacheSchemaVersion}`],
+                  ['Telemetry points', diagnostics.enrichmentProcessedPoints.toLocaleString()],
+                  ['Enrichment', diagnostics.enrichmentIssue ? 'degraded' : 'ok']
+                ].map(([k, v]) => (
+                  <div key={k}>
+                    <div className="text-2xs uppercase tracking-wide text-fg-subtle">{k}</div>
+                    <div className="tnum text-sm font-semibold text-fg">{v}</div>
+                  </div>
+                ))}
+                {diagnostics.enrichmentIssue && (
+                  <p className="col-span-2 text-xs text-warn sm:col-span-4">
+                    {diagnostics.enrichmentIssue}
+                  </p>
+                )}
+              </div>
+            ) : (
+              <p className="text-xs text-fg-subtle">Not available for this provider.</p>
+            )}
+          </div>
+        )}
       </div>
     </div>
   )

@@ -37,9 +37,27 @@ function Row({ label, value, tone }: { label: string; value: string; tone?: stri
   )
 }
 
+/**
+ * Find the best sync candidate near the current moment and calibrate to it.
+ * Exported so the unified system-status panel (APP_IMPROVEMENT_ROADMAP.md P2
+ * item 28) can offer the same "Recalibrate now" recovery action without
+ * duplicating this logic.
+ */
+export function recalibrateNow(): void {
+  const session = useSessionStore.getState()
+  if (!session.currentSession) return
+  const sync = useSyncStore.getState()
+  const markLiveSec = session.clock
+  const startMs = session.currentSession.dateStart
+    ? Date.parse(session.currentSession.dateStart)
+    : Number.NaN
+  sync.buildCandidates(session.getRaceControlHistory(), markLiveSec, startMs)
+  const best = bestCandidate(useSyncStore.getState().candidates)
+  if (best) void sync.calibrate(syncMath.offsetForLiveAlignment(markLiveSec, best.dataSec), best.label)
+}
+
 export function SyncHealthIndicator() {
-  const { sync, follow, anchor, lastMatchedEvent, lastProbeAtMs, calibrate, buildCandidates } =
-    useSyncStore()
+  const { sync, follow, anchor, lastMatchedEvent, lastProbeAtMs, calibrate } = useSyncStore()
   const dataClock = useSessionStore((s) => s.clock)
 
   // Only meaningful once follow is on — off is already shown by the plain sync chip.
@@ -61,18 +79,6 @@ export function SyncHealthIndicator() {
   const driftTone = drift != null && Math.abs(drift) >= 1 ? 'text-warn' : undefined
   const probeAgeSec =
     lastProbeAtMs != null ? Math.max(0, (Date.now() - lastProbeAtMs) / 1000) : null
-
-  const recalibrateNow = () => {
-    const session = useSessionStore.getState()
-    if (!session.currentSession) return
-    const markLiveSec = session.clock
-    const startMs = session.currentSession.dateStart
-      ? Date.parse(session.currentSession.dateStart)
-      : Number.NaN
-    buildCandidates(session.getRaceControlHistory(), markLiveSec, startMs)
-    const best = bestCandidate(useSyncStore.getState().candidates)
-    if (best) void calibrate(syncMath.offsetForLiveAlignment(markLiveSec, best.dataSec), best.label)
-  }
 
   const anchorToCurrentMoment = () => void calibrate(sync.offsetSeconds)
 

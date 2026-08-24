@@ -81,6 +81,8 @@ interface SessionStoreState {
   getRaceControlHistory: () => RaceControlMessage[]
   /** Whole-session snapshot (not the current playhead) — for exports/bookmarks. */
   getFullSnapshot: () => RaceSnapshot | null
+  /** Cache/enrichment diagnostics for the active provider, when it exposes any. */
+  getDiagnostics: () => ReturnType<DataProviderManager['getDiagnostics']>
 }
 
 export const useSessionStore = create<SessionStoreState>((set, get) => ({
@@ -331,7 +333,8 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
     const duration = get().duration
     if (duration <= 0) return null
     return manager.getSnapshotAt(duration)
-  }
+  },
+  getDiagnostics: () => manager.getDiagnostics()
 }))
 
 // When the sync offset changes while paused, re-render the shifted snapshot.

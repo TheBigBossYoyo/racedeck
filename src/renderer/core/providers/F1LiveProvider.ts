@@ -31,7 +31,13 @@ import {
   type F1StreamPoint,
   type SessionClockPoint
 } from '@shared/f1live'
-import type { DataProvider, ProviderCapabilities, RaceSnapshot, SessionTimeline } from './types'
+import type {
+  DataProvider,
+  ProviderCapabilities,
+  ProviderDiagnostics,
+  RaceSnapshot,
+  SessionTimeline
+} from './types'
 import { buildTimeline } from '@renderer/core/engines/SessionPhaseEngine'
 import {
   initErsState,
@@ -89,6 +95,13 @@ const ENRICHMENT_NOTIFY_MIN_MS = 300 // bound snapshot fan-out while chunks stre
  * own point budget, so a trace of a long circuit is not rejected on read-back.
  */
 const TRACK_PATH_CACHE_MAX = 700
+
+/**
+ * Bump when the shape of a cached track-path entry changes. Included in the
+ * cache key so a stale-shaped entry from an older RaceDeck version is treated
+ * as a miss (rebuilt from live position data) rather than silently misread.
+ */
+export const TRACK_PATH_CACHE_SCHEMA_VERSION = 1
 
 /**
  * Renderer-side retention for CarData/Position, matching the socket's own cap
@@ -224,6 +237,10 @@ export class F1LiveProvider implements DataProvider {
    */
   private eligibleSinceClock = new Map<number, number>()
 
+  /** Diagnostics (APP_IMPROVEMENT_ROADMAP.md P2 item 32) — set during loadSession/enrichment. */
+  private trackPathCacheStatus: 'hit' | 'miss' | 'unavailable' = 'unavailable'
+  private enrichmentIssue: { feed: 'position' | 'carData'; message: string } | null = null
+
   /** Rolling ERS integration state, so telemetry batches integrate as they stream. */
   private ersBuild = newErsBuild()
 
@@ -353,6 +370,9 @@ export class F1LiveProvider implements DataProvider {
       if (cached && !this.trackPathClosed) {
         this.trackPath = cached
         this.trackPathClosed = true
+        this.trackPathCacheStatus = 'hit'
+      } else if (!cached) {
+        this.trackPathCacheStatus = 'miss'
       }
       this.publishPositionsIfReady(false)
     }
@@ -381,7 +401,8 @@ export class F1LiveProvider implements DataProvider {
     const segments = source.split('/').filter(Boolean)
     if (segments.length < 2) return null
     // electron-store paths split on dots; keep the key flat.
-    return segments.slice(0, 2).join('/').replace(/\./g, '_')
+    const meetingKey = segments.slice(0, 2).join('/').replace(/\./g, '_')
+    return `v${TRACK_PATH_CACHE_SCHEMA_VERSION}/${meetingKey}`
   }
 
   /**
@@ -599,6 +620,17 @@ export class F1LiveProvider implements DataProvider {
     this.sessionLoadVersion++
   }
 
+  getDiagnostics(): ProviderDiagnostics {
+    return {
+      trackPathCacheStatus: this.trackPathCacheStatus,
+      cacheSchemaVersion: TRACK_PATH_CACHE_SCHEMA_VERSION,
+      enrichmentProcessedPoints: this.ersProcessed,
+      enrichmentIssue: this.enrichmentIssue
+        ? `${this.enrichmentIssue.feed}: ${this.enrichmentIssue.message}`
+        : null
+    }
+  }
+
   private async loadEnrichment(sessionId: string, loadVersion: number): Promise<void> {
     // Ordering guarantee: the map always publishes before telemetry STARTS.
     // Once it has, CarData streams concurrently with the Position tail — the
@@ -607,16 +639,23 @@ export class F1LiveProvider implements DataProvider {
     let carDataStream: Promise<void> | null = null
     const startCarData = (): void => {
       if (carDataStream) return
-      carDataStream = this.streamEnrichmentFeed(sessionId, loadVersion, 'carData').catch(() => {
+      carDataStream = this.streamEnrichmentFeed(sessionId, loadVersion, 'carData').catch((e: unknown) => {
         // Telemetry is optional; core timing and the map remain fully usable.
+        // Still recorded (APP_IMPROVEMENT_ROADMAP.md P2 item 32/28) so a
+        // silent degrade is visible in diagnostics instead of reading as a freeze.
+        this.enrichmentIssue = { feed: 'carData', message: e instanceof Error ? e.message : 'Unknown error' }
       })
     }
     try {
       await this.streamEnrichmentFeed(sessionId, loadVersion, 'position', () => {
         if (this.positionsPublished) startCarData()
       })
-    } catch {
+    } catch (e) {
       // Position is optional; telemetry can still enrich the timing session.
+      this.enrichmentIssue = {
+        feed: 'position',
+        message: e instanceof Error ? e.message : 'Unknown error'
+      }
     }
     if (loadVersion !== this.sessionLoadVersion || this.session?.id !== sessionId) return
     startCarData()
@@ -764,6 +803,8 @@ export class F1LiveProvider implements DataProvider {
       this.ersPoints = []
       this.eligibleSinceClock = new Map()
       this.ersProcessed = 0
+      this.trackPathCacheStatus = 'unavailable'
+      this.enrichmentIssue = null
       this.telemetryAvailable = hasUsableCarData(this.carDataPoints)
     } else if (!this.telemetryAvailable) {
       this.telemetryAvailable = hasUsableCarData(this.carDataPoints.slice(this.ersProcessed))

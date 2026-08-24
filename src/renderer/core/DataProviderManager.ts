@@ -1,5 +1,11 @@
 import type { SessionInfo } from '@shared/models'
-import type { DataProvider, ProviderCapabilities, RaceSnapshot, SessionTimeline } from './providers/types'
+import type {
+  DataProvider,
+  ProviderCapabilities,
+  ProviderDiagnostics,
+  RaceSnapshot,
+  SessionTimeline
+} from './providers/types'
 import { DemoProvider } from './providers/DemoProvider'
 import { OpenF1Provider } from './providers/OpenF1Provider'
 import { F1LiveProvider } from './providers/F1LiveProvider'
@@ -89,5 +95,9 @@ export class DataProviderManager {
 
   getTelemetry(driverNumber: number, t: number, windowSec?: number) {
     return this.active.getTelemetry?.(driverNumber, t, windowSec) ?? []
+  }
+
+  getDiagnostics(): ProviderDiagnostics | null {
+    return this.active.getDiagnostics?.() ?? null
   }
 }

@@ -13,12 +13,23 @@ import type { TimingEntry } from '@shared/models'
 /** TimingData is a lower-rate feed than Position/CarData; a longer quiet spell means it stopped. */
 const TIMING_STALE_MS = 15_000
 
+// Color is never the only encoding (APP_IMPROVEMENT_ROADMAP.md P2 item 30):
+// each state also gets a distinct fill/ring pattern, not just a hue, so a
+// color-vision-deficient viewer can still tell them apart by shape/fill.
 const SECTOR_CLS: Record<SectorDisplayState, string> = {
-  none: 'bg-fg-subtle/25',
-  active: 'bg-warn/45 animate-pulse',
-  complete: 'bg-warn/85',
+  none: 'border border-fg-subtle/40 bg-transparent',
+  active: 'border-2 border-warn bg-warn/25 animate-pulse',
+  complete: 'bg-warn/60',
   'personal-best': 'bg-good',
-  'session-best': 'bg-purple'
+  'session-best': 'bg-purple ring-2 ring-inset ring-white/70'
+}
+
+const SECTOR_LABEL: Record<SectorDisplayState, string> = {
+  none: 'no time yet',
+  active: 'in progress',
+  complete: 'set',
+  'personal-best': 'personal best',
+  'session-best': 'session best'
 }
 
 type GridScope = 'all' | '10' | '5' | '3'
@@ -27,16 +38,19 @@ function SectorTriad({ e }: { e: TimingEntry }) {
   const s = [e.sector1, e.sector2, e.sector3]
   return (
     <div className="flex items-center gap-0.5">
-      {s.map((sec, i) => (
-        <span
-          key={i}
-          className={cn(
-            'h-1.5 w-3 rounded-sm transition-colors',
-            SECTOR_CLS[sectorDisplayState(sec)]
-          )}
-          title={`S${i + 1} ${sec.seconds ? sec.seconds.toFixed(3) : '—'}`}
-        />
-      ))}
+      {s.map((sec, i) => {
+        const state = sectorDisplayState(sec)
+        const label = `Sector ${i + 1}: ${SECTOR_LABEL[state]}${sec.seconds ? `, ${sec.seconds.toFixed(3)}s` : ''}`
+        return (
+          <span
+            key={i}
+            role="img"
+            aria-label={label}
+            className={cn('h-1.5 w-3 rounded-sm transition-colors', SECTOR_CLS[state])}
+            title={label}
+          />
+        )
+      })}
     </div>
   )
 }
@@ -186,7 +200,13 @@ export function TimingTower() {
                         {/^\d+s$/.test(e.penalty) ? `+${e.penalty}` : e.penalty}
                       </span>
                     )}
-                    {e.underInvestigation && <TriangleAlert className="h-3 w-3 text-warn" />}
+                    {e.underInvestigation && (
+                      <TriangleAlert
+                        className="h-3 w-3 text-warn"
+                        role="img"
+                        aria-label="Under investigation"
+                      />
+                    )}
                   </div>
                   <div className="flex items-center gap-1.5">
                     <TyrePill compound={e.compound} age={e.stintAge} size="sm" />
