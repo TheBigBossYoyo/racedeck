@@ -7,6 +7,8 @@ import {
   applyOvertakeEligibility,
   computeErsEstimate,
   deriveEnergyTrend,
+  explainOvertakeEligibility,
+  eligibilityDurationSec,
   type ErsEstimate,
   type ErsTelemetrySample,
   type ErsTimelinePoint
@@ -365,5 +367,60 @@ describe('ERS calibration across representative circuits', () => {
     const afterReportedGap = integrateErs(st, braking, 5_000).soc
     expect(afterReportedGap).toBe(afterHugeGap)
     expect(Math.abs(afterReportedGap - beforeGap)).toBeLessThan(8)
+  })
+})
+
+describe('explainOvertakeEligibility', () => {
+  it('reports no target when there is no car ahead', () => {
+    const result = explainOvertakeEligibility('DEPLOY', null, 100)
+    expect(result.eligible).toBe(false)
+    expect(result.reason).toMatch(/no car ahead/i)
+  })
+
+  it('reports the gap when out of range', () => {
+    const result = explainOvertakeEligibility('DEPLOY', 1.8, 100)
+    expect(result.eligible).toBe(false)
+    expect(result.reason).toMatch(/1\.8s/)
+  })
+
+  it('reports lapped traffic (string interval) as ineligible', () => {
+    const result = explainOvertakeEligibility('DEPLOY', '+1 LAP', 100)
+    expect(result.eligible).toBe(false)
+  })
+
+  it('reports eligible-but-budget-spent within range', () => {
+    const result = explainOvertakeEligibility('OVERTAKE', 0.5, 0)
+    expect(result.eligible).toBe(false)
+    expect(result.reason).toMatch(/allowance is spent/i)
+  })
+
+  it('reports eligible with OVERTAKE mode and budget remaining', () => {
+    const result = explainOvertakeEligibility('OVERTAKE', 0.5, 40)
+    expect(result.eligible).toBe(true)
+    expect(result.reason).toMatch(/eligible/i)
+  })
+
+  it('reports eligible gap even when the model has not switched to OVERTAKE yet', () => {
+    const result = explainOvertakeEligibility('HARVEST', 0.5, 40)
+    expect(result.eligible).toBe(true)
+    expect(result.reason).toMatch(/not currently deploying/i)
+  })
+})
+
+describe('eligibilityDurationSec', () => {
+  it('returns null with no start clock', () => {
+    expect(eligibilityDurationSec(undefined, 100)).toBeNull()
+  })
+
+  it('returns null after a backward scrub past the start clock', () => {
+    expect(eligibilityDurationSec(90, 50)).toBeNull()
+  })
+
+  it('returns elapsed seconds during forward playback', () => {
+    expect(eligibilityDurationSec(90, 97)).toBe(7)
+  })
+
+  it('returns zero exactly at the start clock', () => {
+    expect(eligibilityDurationSec(90, 90)).toBe(0)
   })
 })

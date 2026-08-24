@@ -1,10 +1,15 @@
 import { useMemo } from 'react'
-import { Route, Flag, Trophy } from 'lucide-react'
+import { Route, Flag, Trophy, GitCompare } from 'lucide-react'
 import { WidgetFrame } from '@renderer/components/ui/WidgetFrame'
 import { EmptyState, Badge, TyrePill } from '@renderer/components/ui/primitives'
 import { useSessionStore } from '@renderer/store/sessionStore'
 import { useFocusDriver } from '@renderer/lib/useFocusDriver'
-import { planRemainingStrategy, type StrategyPlan } from '@renderer/core/engines/StrategyEngine'
+import {
+  planRemainingStrategy,
+  StrategyEngine,
+  type StrategyPlan,
+  type PitScenario
+} from '@renderer/core/engines/StrategyEngine'
 import { TYRE_LABELS } from '@shared/constants'
 import { useTyreColors } from '@renderer/lib/useTyreColors'
 import { cn } from '@renderer/lib/utils'
@@ -84,13 +89,52 @@ function PlanRow({ plan, best }: { plan: StrategyPlan; best?: boolean }) {
   )
 }
 
+function ScenarioRow({ scenario }: { scenario: PitScenario }) {
+  const delta = scenario.deltaVsBoxNowSec
+  return (
+    <div
+      className="rounded-lg border border-hairline/20 bg-white/[0.015] px-2.5 py-1.5"
+      title={scenario.rationale.join(' ')}
+    >
+      <div className="flex items-center gap-2">
+        <span className="flex items-center gap-1 text-xs font-semibold text-fg-muted">
+          {scenario.label}
+          {scenario.isHypothetical && <Badge tone="neutral">hypothetical</Badge>}
+        </span>
+        <span className="ml-auto tnum text-xs font-semibold">
+          {delta == null ? (
+            <span className="text-fg-subtle">—</span>
+          ) : delta === 0 ? (
+            <span className="text-fg-subtle">baseline</span>
+          ) : (
+            <span className={delta > 0 ? 'text-warn' : 'text-good'}>
+              {delta > 0 ? '+' : ''}
+              {delta.toFixed(1)}s
+            </span>
+          )}
+        </span>
+      </div>
+      <p className="mt-0.5 truncate text-[10px] leading-snug text-fg-subtle">
+        {scenario.rationale[0]}
+      </p>
+    </div>
+  )
+}
+
 export function StintPlanner() {
   const snapshot = useSessionStore((s) => s.snapshot)
+  const getDriverLaps = useSessionStore((s) => s.getDriverLaps)
   const driver = useFocusDriver()
 
   const plan = useMemo(() => {
     if (!snapshot || driver == null) return null
     return planRemainingStrategy(snapshot, driver)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [snapshot, driver])
+
+  const scenarios = useMemo(() => {
+    if (!snapshot || driver == null) return null
+    return StrategyEngine.buildPitScenarios(snapshot, driver, getDriverLaps(driver))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [snapshot, driver])
 
@@ -203,6 +247,19 @@ export function StintPlanner() {
               <div className="space-y-1">
                 {plan.alternatives.map((alt, i) => (
                   <PlanRow key={i} plan={alt} />
+                ))}
+              </div>
+            </div>
+          )}
+
+          {scenarios && (
+            <div>
+              <div className="mb-1 flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-fg-subtle">
+                <GitCompare className="h-3 w-3" /> Scenarios
+              </div>
+              <div className="space-y-1">
+                {scenarios.map((scenario) => (
+                  <ScenarioRow key={scenario.id} scenario={scenario} />
                 ))}
               </div>
             </div>

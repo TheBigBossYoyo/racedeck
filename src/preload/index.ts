@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
 import {
   IPC,
+  type DebriefFormat,
   type RaceDeckApi,
   type SetVideoModeRequest,
   type SurfaceBounds
@@ -8,7 +9,14 @@ import {
 import type { VideoModeState } from '@shared/models'
 import type { AiCompletionRequest } from '@shared/ai'
 import type { MarketWinnerRequest, MarketHistoryRequest } from '@shared/market'
-import type { F1SessionSummary, F1SessionData, F1SessionEnrichmentRequest, F1SessionEnrichmentChunk, F1LiveDataDelta, LiveStatus } from '@shared/f1live'
+import type {
+  F1SessionSummary,
+  F1SessionData,
+  F1SessionEnrichmentRequest,
+  F1SessionEnrichmentChunk,
+  F1LiveDataDelta,
+  LiveStatus
+} from '@shared/f1live'
 import type { PracticeBriefRequest } from '@shared/practice'
 import type { StandingsRequest } from '@shared/standings'
 
@@ -20,7 +28,9 @@ import type { StandingsRequest } from '@shared/standings'
 const api: RaceDeckApi = {
   app: {
     info: () => ipcRenderer.invoke(IPC.APP_INFO),
-    capturePng: (defaultName?: string) => ipcRenderer.invoke(IPC.APP_CAPTURE_PNG, defaultName)
+    capturePng: (defaultName?: string) => ipcRenderer.invoke(IPC.APP_CAPTURE_PNG, defaultName),
+    exportDebrief: (content: string, format: DebriefFormat, defaultName?: string) =>
+      ipcRenderer.invoke(IPC.APP_EXPORT_DEBRIEF, content, format, defaultName)
   },
   window: {
     minimize: () => ipcRenderer.send(IPC.WINDOW_MINIMIZE),
@@ -77,8 +87,10 @@ const api: RaceDeckApi = {
     connectLive: (): Promise<LiveStatus> => ipcRenderer.invoke(IPC.F1_CONNECT_LIVE),
     disconnectLive: () => ipcRenderer.send(IPC.F1_DISCONNECT_LIVE),
     liveStatus: (): Promise<LiveStatus> => ipcRenderer.invoke(IPC.F1_LIVE_STATUS),
-    getLive: (cursors?: Record<string, number>, generation?: number): Promise<F1LiveDataDelta | null> =>
-      ipcRenderer.invoke(IPC.F1_GET_LIVE, cursors, generation),
+    getLive: (
+      cursors?: Record<string, number>,
+      generation?: number
+    ): Promise<F1LiveDataDelta | null> => ipcRenderer.invoke(IPC.F1_GET_LIVE, cursors, generation),
     onLiveStatus: (cb: (status: LiveStatus) => void) => {
       const listener = (_e: IpcRendererEvent, status: LiveStatus) => cb(status)
       ipcRenderer.on(IPC.F1_LIVE_STATUS_CHANGED, listener)

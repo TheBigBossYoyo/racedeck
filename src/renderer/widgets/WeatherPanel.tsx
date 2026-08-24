@@ -1,9 +1,14 @@
 import { useMemo } from 'react'
 import { CloudRain, Wind, Droplets, Thermometer, Gauge, Sun } from 'lucide-react'
 import { WidgetFrame } from '@renderer/components/ui/WidgetFrame'
-import { EmptyState, Badge } from '@renderer/components/ui/primitives'
+import { EmptyState, Badge, ProvenanceBadge } from '@renderer/components/ui/primitives'
 import { useSessionStore } from '@renderer/store/sessionStore'
 import { cn } from '@renderer/lib/utils'
+import {
+  weatherFieldTrend,
+  rainTransition,
+  dryingReadiness
+} from '@renderer/core/engines/WeatherTrendEngine'
 
 function Stat({
   icon,
@@ -20,7 +25,11 @@ function Stat({
 }) {
   return (
     <div className="flex items-center gap-2 rounded-lg border border-hairline/20 bg-white/[0.02] px-2.5 py-2">
-      <span className={cn(tone === 'accent' ? 'text-accent' : tone === 'warn' ? 'text-warn' : 'text-fg-subtle')}>
+      <span
+        className={cn(
+          tone === 'accent' ? 'text-accent' : tone === 'warn' ? 'text-warn' : 'text-fg-subtle'
+        )}
+      >
         {icon}
       </span>
       <div className="flex min-w-0 flex-col">
@@ -53,7 +62,13 @@ function Spark({ values, color }: { values: number[]; color: string }) {
   }, [values])
   return (
     <svg viewBox="0 0 100 28" preserveAspectRatio="none" className="h-7 w-full">
-      <path d={path} fill="none" stroke={color} strokeWidth={1.5} vectorEffect="non-scaling-stroke" />
+      <path
+        d={path}
+        fill="none"
+        stroke={color}
+        strokeWidth={1.5}
+        vectorEffect="non-scaling-stroke"
+      />
     </svg>
   )
 }
@@ -64,6 +79,13 @@ export function WeatherPanel() {
   const history = snapshot?.weatherHistory ?? []
 
   const trackTrend = history.map((h) => h.trackTemp ?? 0).filter((v) => v > 0)
+  const airTrend = history.map((h) => h.airTemp ?? 0).filter((v) => v > 0)
+  const windTrend = history.map((h) => h.windSpeed ?? 0).filter((v) => v >= 0)
+
+  const airDirection = weatherFieldTrend(history, 'airTemp').direction
+  const windDirection = weatherFieldTrend(history, 'windSpeed').direction
+  const rain = rainTransition(history)
+  const readiness = dryingReadiness(history, w ?? null)
 
   if (!snapshot || !snapshot.availability.weather || !w) {
     return (
@@ -77,12 +99,15 @@ export function WeatherPanel() {
     <WidgetFrame
       title="Weather"
       icon={w.rainfall ? <CloudRain /> : <Sun />}
-      actions={
-        w.rainfall ? <Badge tone="accent">RAIN</Badge> : <Badge tone="good">DRY</Badge>
-      }
+      actions={w.rainfall ? <Badge tone="accent">RAIN</Badge> : <Badge tone="good">DRY</Badge>}
     >
       <div className="grid grid-cols-2 gap-1.5">
-        <Stat icon={<Thermometer className="h-4 w-4" />} label="Air" value={w.airTemp?.toFixed(1) ?? '—'} unit="°C" />
+        <Stat
+          icon={<Thermometer className="h-4 w-4" />}
+          label="Air"
+          value={w.airTemp?.toFixed(1) ?? '—'}
+          unit="°C"
+        />
         <Stat
           icon={<Thermometer className="h-4 w-4" />}
           label="Track"
@@ -90,8 +115,18 @@ export function WeatherPanel() {
           unit="°C"
           tone="warn"
         />
-        <Stat icon={<Droplets className="h-4 w-4" />} label="Humidity" value={w.humidity?.toFixed(0) ?? '—'} unit="%" />
-        <Stat icon={<Gauge className="h-4 w-4" />} label="Pressure" value={w.pressure?.toFixed(0) ?? '—'} unit="mb" />
+        <Stat
+          icon={<Droplets className="h-4 w-4" />}
+          label="Humidity"
+          value={w.humidity?.toFixed(0) ?? '—'}
+          unit="%"
+        />
+        <Stat
+          icon={<Gauge className="h-4 w-4" />}
+          label="Pressure"
+          value={w.pressure?.toFixed(0) ?? '—'}
+          unit="mb"
+        />
         <Stat
           icon={<Wind className="h-4 w-4" />}
           label="Wind"
@@ -109,9 +144,49 @@ export function WeatherPanel() {
         <div className="mt-2 rounded-lg border border-hairline/20 bg-white/[0.02] px-2.5 py-2">
           <div className="mb-1 flex items-center justify-between text-[10px] uppercase tracking-wide text-fg-subtle">
             <span>Track temp trend</span>
-            <span className="tnum text-fg-muted">{trackTrend[trackTrend.length - 1].toFixed(1)}°C</span>
+            <span className="tnum text-fg-muted">
+              {trackTrend[trackTrend.length - 1].toFixed(1)}°C
+            </span>
           </div>
           <Spark values={trackTrend} color="rgb(245 158 11)" />
+        </div>
+      )}
+      {airTrend.length > 1 && (
+        <div className="mt-1.5 rounded-lg border border-hairline/20 bg-white/[0.02] px-2.5 py-2">
+          <div className="mb-1 flex items-center justify-between text-[10px] uppercase tracking-wide text-fg-subtle">
+            <span>Air temp trend ({airDirection})</span>
+            <span className="tnum text-fg-muted">{airTrend[airTrend.length - 1].toFixed(1)}°C</span>
+          </div>
+          <Spark values={airTrend} color="rgb(96 165 250)" />
+        </div>
+      )}
+      {windTrend.length > 1 && (
+        <div className="mt-1.5 rounded-lg border border-hairline/20 bg-white/[0.02] px-2.5 py-2">
+          <div className="mb-1 flex items-center justify-between text-[10px] uppercase tracking-wide text-fg-subtle">
+            <span>Wind trend ({windDirection})</span>
+            <span className="tnum text-fg-muted">
+              {windTrend[windTrend.length - 1].toFixed(1)} m/s
+            </span>
+          </div>
+          <Spark values={windTrend} color="rgb(148 163 184)" />
+        </div>
+      )}
+      {readiness !== 'unknown' && (
+        <div className="mt-1.5 flex items-center gap-1.5 rounded-lg border border-hairline/20 bg-white/[0.02] px-2.5 py-1.5 text-2xs">
+          <span className="text-fg-muted">
+            {readiness === 'raining' && rain.kind === 'onset' && rain.elapsedSec != null
+              ? `Raining for ${Math.round(rain.elapsedSec / 60)}m`
+              : readiness === 'raining'
+                ? 'Raining'
+                : readiness === 'drying' && rain.elapsedSec != null
+                  ? `Rain stopped ${Math.round(rain.elapsedSec / 60)}m ago — drying`
+                  : 'Track dry this session'}
+          </span>
+          <ProvenanceBadge
+            provenance="modelled"
+            detail="Read from real weather-sample history, not a forecast — no future prediction."
+            className="ml-auto"
+          />
         </div>
       )}
     </WidgetFrame>

@@ -2,8 +2,49 @@ import { AlertTriangle, CircleDashed } from 'lucide-react'
 import { ProvenanceBadge, TyrePill } from '@renderer/components/ui/primitives'
 import { Sparkline } from '@renderer/components/ui/Sparkline'
 import type { TyreReadModel } from '@renderer/core/engines/TyreRead'
+import type { SectorDegradationPoint } from '@renderer/core/engines/SectorDegradation'
 import { TyreHistoryDrawer } from '@renderer/widgets/driverDossier/TyreHistoryDrawer'
 import { cn } from '@renderer/lib/utils'
+
+const HEAVY_SECTOR_DEGRADATION = 0.05
+
+function sectorChipText(point: SectorDegradationPoint): string {
+  if (point.slopeSecPerLap == null) return `S${point.sector} —`
+  if (Math.abs(point.slopeSecPerLap) < 0.01) return `S${point.sector} flat`
+  const sign = point.slopeSecPerLap >= 0 ? '+' : ''
+  return `S${point.sector} ${sign}${point.slopeSecPerLap.toFixed(2)}s/lap`
+}
+
+function SectorDegradationRow({ sectors }: { readonly sectors: SectorDegradationPoint[] }) {
+  if (sectors.every((s) => s.slopeSecPerLap == null)) return null
+  return (
+    <div className="mt-1.5 flex items-center gap-1.5 rounded-lg border border-hairline/15 bg-black/20 px-2 py-1 text-[10px]">
+      <span className="text-[9px] uppercase tracking-wide text-fg-subtle">Sectors</span>
+      <div className="ml-auto flex items-center gap-2">
+        {sectors.map((s) => (
+          <span
+            key={s.sector}
+            className={cn(
+              'tnum',
+              s.slopeSecPerLap == null
+                ? 'text-fg-subtle'
+                : s.slopeSecPerLap > HEAVY_SECTOR_DEGRADATION
+                  ? 'text-warn'
+                  : 'text-fg-muted'
+            )}
+            title={
+              s.deltaToBestSec != null
+                ? `${s.deltaToBestSec >= 0 ? '+' : ''}${s.deltaToBestSec.toFixed(2)}s vs own best S${s.sector}`
+                : undefined
+            }
+          >
+            {sectorChipText(s)}
+          </span>
+        ))}
+      </div>
+    </div>
+  )
+}
 
 const CONDITION_META: Record<
   NonNullable<TyreReadModel['condition']>,
@@ -37,6 +78,26 @@ const BLOCKER_TEXT: Record<'traffic' | 'insufficient-laps', string> = {
   'insufficient-laps': 'Not enough clean laps on this set yet to read a wear trend.'
 }
 
+const CONTAMINATION_REASON_TEXT: Record<
+  NonNullable<TyreReadModel['contaminationReasons']>[number],
+  string
+> = {
+  'close-traffic': 'held up within a second of the car ahead',
+  train: 'running in a train of cars',
+  'lapped-traffic': 'a lap down',
+  'pit-interaction': 'a car ahead/behind is entering or leaving the pits',
+  neutralized: 'the field is bunched under Safety Car/VSC',
+  'sector-yellow': 'an active sector yellow nearby'
+}
+
+function contaminationBlurb(
+  reasons: readonly TyreReadModel['contaminationReasons'][number][]
+): string {
+  if (reasons.length === 0) return BLOCKER_TEXT.traffic
+  const parts = reasons.map((r) => CONTAMINATION_REASON_TEXT[r])
+  return `This lap is ${parts.join(' and ')} — this pace is not a clean tyre read.`
+}
+
 function TyreStat({
   label,
   value,
@@ -54,9 +115,19 @@ function TyreStat({
   )
 }
 
-export function TyrePanel({ read }: { readonly read: TyreReadModel }) {
+export function TyrePanel({
+  read,
+  sectors
+}: {
+  readonly read: TyreReadModel
+  readonly sectors?: SectorDegradationPoint[]
+}) {
   const condition = read.condition ? CONDITION_META[read.condition] : null
-  const blocker = read.degradationBlocker ? BLOCKER_TEXT[read.degradationBlocker] : null
+  const blocker = !read.degradationBlocker
+    ? null
+    : read.degradationBlocker === 'traffic'
+      ? contaminationBlurb(read.contaminationReasons)
+      : BLOCKER_TEXT[read.degradationBlocker]
   const vsField =
     read.degradationPerLap != null && read.fieldDegradationPerLap != null
       ? read.degradationPerLap - read.fieldDegradationPerLap
@@ -102,6 +173,8 @@ export function TyrePanel({ read }: { readonly read: TyreReadModel }) {
           tone={degradationTone}
         />
       </div>
+
+      {sectors && sectors.length > 0 && <SectorDegradationRow sectors={sectors} />}
 
       {read.sparklineLaps.length >= 2 && (
         <div className="mt-1.5 flex items-center gap-2 rounded-lg border border-hairline/15 bg-black/20 px-2 py-1">

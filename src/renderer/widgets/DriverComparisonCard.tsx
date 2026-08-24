@@ -4,6 +4,8 @@ import { WidgetFrame } from '@renderer/components/ui/WidgetFrame'
 import { EmptyState, TyrePill } from '@renderer/components/ui/primitives'
 import { useSessionStore } from '@renderer/store/sessionStore'
 import { formatGap, formatLapTime, formatDelta, hexColor, cn } from '@renderer/lib/utils'
+import { alignTelemetryByLapTime } from '@renderer/core/engines/TelemetryCompare'
+import { TelemetryOverlayChart } from '@renderer/widgets/TelemetryOverlayChart'
 import type { Driver, TimingEntry } from '@shared/models'
 
 function DriverSelect({
@@ -75,6 +77,7 @@ export function DriverComparisonCard() {
   const snapshot = useSessionStore((s) => s.snapshot)
   const focusDriver = useSessionStore((s) => s.focusDriver)
   const getDriverLaps = useSessionStore((s) => s.getDriverLaps)
+  const getTelemetry = useSessionStore((s) => s.getTelemetry)
 
   const drivers = snapshot?.drivers ?? []
   const timing = snapshot?.timing ?? []
@@ -113,6 +116,45 @@ export function DriverComparisonCard() {
     return { a, b, bestA: bestLapOf(aNum), bestB: bestLapOf(bNum) }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [aNum, bNum, timing])
+
+  // Synchronized speed trace for each driver's most recent completed lap
+  // (APP_IMPROVEMENT_ROADMAP.md P2 item 22). Aligned by elapsed time since
+  // each lap's own start — no per-sample track distance exists in this data.
+  const telemetryOverlay = useMemo(() => {
+    if (!snapshot || aNum == null || bNum == null) return null
+    if (!snapshot.availability.telemetry || !snapshot.session.dateStart) return null
+    const lastCleanLap = (n: number) =>
+      getDriverLaps(n)
+        .filter((l) => l.lapTime != null && l.lapTime > 0 && l.dateStart != null)
+        .slice(-1)[0]
+    const lapA = lastCleanLap(aNum)
+    const lapB = lastCleanLap(bNum)
+    if (!lapA || !lapB) return null
+
+    const sessionStartMs = Date.parse(snapshot.session.dateStart)
+    if (!Number.isFinite(sessionStartMs)) return null
+    const nowMs = sessionStartMs + snapshot.clock * 1000
+    const windowSecFor = (lap: typeof lapA) => {
+      const lapStartMs = Date.parse(lap.dateStart as string)
+      if (!Number.isFinite(lapStartMs)) return null
+      return Math.max(1, (nowMs - lapStartMs) / 1000 + 2)
+    }
+    const windowA = windowSecFor(lapA)
+    const windowB = windowSecFor(lapB)
+    if (windowA == null || windowB == null) return null
+
+    const samplesA = getTelemetry(aNum, windowA)
+    const samplesB = getTelemetry(bNum, windowB)
+    const duration = Math.max(lapA.lapTime as number, lapB.lapTime as number)
+    return alignTelemetryByLapTime(
+      samplesA,
+      lapA.dateStart as string,
+      samplesB,
+      lapB.dateStart as string,
+      duration
+    )
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [snapshot, aNum, bNum, getDriverLaps, getTelemetry])
 
   if (!snapshot || timing.length === 0 || !data || aNum == null || bNum == null) {
     return (
@@ -236,6 +278,16 @@ export function DriverComparisonCard() {
             )
           })}
       </div>
+
+      {telemetryOverlay && telemetryOverlay.length > 1 && (
+        <div className="mt-2 rounded-lg border border-hairline/20 bg-white/[0.02] px-2.5 py-2">
+          <div className="mb-1 flex items-center justify-between text-[10px] uppercase tracking-wide text-fg-subtle">
+            <span>Speed trace — most recent lap</span>
+            <span className="text-fg-subtle">by elapsed time, not distance</span>
+          </div>
+          <TelemetryOverlayChart points={telemetryOverlay} colorA={colorA} colorB={colorB} />
+        </div>
+      )}
     </WidgetFrame>
   )
 }

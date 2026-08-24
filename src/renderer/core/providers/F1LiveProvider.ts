@@ -40,6 +40,8 @@ import {
   computeErsEstimate,
   applyOvertakeEligibility,
   deriveEnergyTrend,
+  explainOvertakeEligibility,
+  eligibilityDurationSec,
   type ErsDriverState,
   type ErsEstimate,
   type ErsTelemetrySample
@@ -213,6 +215,14 @@ export class F1LiveProvider implements DataProvider {
    * surfaced with `energyIsEstimate: true`. Empty when CarData is unavailable.
    */
   private ersPoints: { t: number; byDriver: Record<number, ErsEstimate> }[] = []
+
+  /**
+   * Clock at which each driver's Overtake eligibility most recently began.
+   * Not a replayable timeline (see `ErsEstimator.eligibilityDurationSec`) —
+   * just enough state to answer "how long has this held" during forward
+   * playback, the normal way a session is watched.
+   */
+  private eligibleSinceClock = new Map<number, number>()
 
   /** Rolling ERS integration state, so telemetry batches integrate as they stream. */
   private ersBuild = newErsBuild()
@@ -752,6 +762,7 @@ export class F1LiveProvider implements DataProvider {
       this.resetFeedMemos()
       this.ersBuild = newErsBuild()
       this.ersPoints = []
+      this.eligibleSinceClock = new Map()
       this.ersProcessed = 0
       this.telemetryAvailable = hasUsableCarData(this.carDataPoints)
     } else if (!this.telemetryAvailable) {
@@ -1306,6 +1317,23 @@ export class F1LiveProvider implements DataProvider {
       e.energyTrend = trend.direction
       e.energyTrendDeltaPct = trend.deltaPct
       e.energyDeploymentLimited = est.deploymentLimited
+
+      const eligibility = explainOvertakeEligibility(
+        e.deployMode,
+        e.intervalAhead,
+        est.deployBudgetRemainingPct
+      )
+      if (eligibility.eligible) {
+        if (this.eligibleSinceClock.get(e.driverNumber) == null) {
+          this.eligibleSinceClock.set(e.driverNumber, clock)
+        }
+      } else {
+        this.eligibleSinceClock.delete(e.driverNumber)
+      }
+      e.energyEligibleForSec = eligibility.eligible
+        ? eligibilityDurationSec(this.eligibleSinceClock.get(e.driverNumber), clock)
+        : null
+      e.energyEligibilityReason = eligibility.reason
     }
   }
 }

@@ -1,5 +1,15 @@
 import { useMemo } from 'react'
-import { IdCard, Crosshair, ShieldAlert, Gauge, Route, AlertTriangle } from 'lucide-react'
+import {
+  IdCard,
+  Crosshair,
+  ShieldAlert,
+  Gauge,
+  Route,
+  AlertTriangle,
+  Radio,
+  Play,
+  Pause
+} from 'lucide-react'
 import { WidgetFrame } from '@renderer/components/ui/WidgetFrame'
 import { EmptyState, Badge, TyrePill } from '@renderer/components/ui/primitives'
 import { ErsGauge } from '@renderer/components/ui/ErsGauge'
@@ -11,6 +21,12 @@ import {
   paceComparison
 } from '@renderer/core/engines/StrategyEngine'
 import { buildTyreRead } from '@renderer/core/engines/TyreRead'
+import { sectorDegradationTrend } from '@renderer/core/engines/SectorDegradation'
+import { estimateFuelCoefficient } from '@renderer/core/engines/FuelModel'
+import { buildPitStopHistory } from '@renderer/core/engines/PitHistory'
+import { PitHistoryPanel } from '@renderer/widgets/driverDossier/PitHistoryPanel'
+import { useRadioPlaybackStore } from '@renderer/store/radioPlaybackStore'
+import { seekToRadioClip } from '@renderer/lib/seekToRadioClip'
 import { TyrePanel } from '@renderer/widgets/driverDossier/TyrePanel'
 import {
   BattleLine,
@@ -24,6 +40,53 @@ const SECTOR_TONE: Record<SectorTime['state'], string> = {
   none: 'text-fg',
   'personal-best': 'text-good',
   'session-best': 'text-purple'
+}
+
+/**
+ * A driver's own team-radio clips (APP_IMPROVEMENT_ROADMAP.md P2 item 23),
+ * each clickable to seek + play through the shared `radioPlaybackStore` so
+ * this and `TeamRadioPanel` never talk over each other.
+ */
+function DossierRadioList({ clips }: { clips: { url: string; utc: string }[] }) {
+  const playingUrl = useRadioPlaybackStore((s) => s.playingUrl)
+  const togglePlayback = useRadioPlaybackStore((s) => s.toggle)
+  const play = (url: string, utc: string) => {
+    togglePlayback(url)
+    seekToRadioClip(utc)
+  }
+  return (
+    <div className="rounded-lg border border-hairline/25 bg-white/[0.02] p-2.5">
+      <div className="mb-1.5 flex items-center gap-1.5 text-2xs font-semibold uppercase tracking-wide text-fg-muted">
+        <Radio className="h-3.5 w-3.5" /> Radio
+      </div>
+      <div className="space-y-1">
+        {clips.map((clip) => {
+          const isPlaying = playingUrl === clip.url
+          return (
+            <button
+              key={clip.url}
+              onClick={() => play(clip.url, clip.utc)}
+              className={cn(
+                'flex w-full items-center gap-2 rounded-md border px-2 py-1 text-left text-[10px] transition-colors',
+                isPlaying
+                  ? 'border-accent/40 bg-accent/10'
+                  : 'border-hairline/15 bg-black/20 hover:border-hairline/35'
+              )}
+            >
+              {isPlaying ? (
+                <Pause className="h-3 w-3 shrink-0 text-accent" />
+              ) : (
+                <Play className="h-3 w-3 shrink-0 text-fg-muted" />
+              )}
+              <span className="tnum ml-auto text-fg-subtle">
+                {new Date(clip.utc).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+              </span>
+            </button>
+          )
+        })}
+      </div>
+    </div>
+  )
 }
 
 export function DriverDossier() {
@@ -61,7 +124,36 @@ export function DriverDossier() {
       aeroMode = samples.length > 0 ? (samples[samples.length - 1].aeroMode ?? null) : null
     }
     const tyre = buildTyreRead(snapshot, entry, laps)
-    return { entry, meta, pit, plan, battle, recent, bestLap: entry.bestLap, aeroMode, tyre }
+    const bestSectorMarks = snapshot.sessionBests?.find(
+      (b) => b.driverNumber === driver
+    )?.bestSectors
+    const bestSectorsSec: [number | null, number | null, number | null] = [
+      bestSectorMarks?.[0]?.value ?? null,
+      bestSectorMarks?.[1]?.value ?? null,
+      bestSectorMarks?.[2]?.value ?? null
+    ]
+    const sectors = sectorDegradationTrend(
+      laps,
+      6,
+      estimateFuelCoefficient(snapshot),
+      bestSectorsSec
+    )
+    const pitHistory = buildPitStopHistory(snapshot).filter((s) => s.driverNumber === driver)
+    const radioClips = (snapshot.teamRadio ?? []).filter((c) => c.driverNumber === driver)
+    return {
+      entry,
+      meta,
+      pit,
+      plan,
+      battle,
+      recent,
+      bestLap: entry.bestLap,
+      aeroMode,
+      tyre,
+      sectors,
+      pitHistory,
+      radioClips
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [snapshot, driver])
 
@@ -203,7 +295,7 @@ export function DriverDossier() {
           {speeds && <SpeedMarks speeds={speeds} />}
 
           {/* Tyre read — age, wear trend and what it means, in one glance */}
-          <TyrePanel read={model.tyre} />
+          <TyrePanel read={model.tyre} sectors={model.sectors} />
 
           {/* Battery energy (2026) */}
           <ErsGauge
@@ -239,6 +331,31 @@ export function DriverDossier() {
               </span>
             </div>
           )}
+
+          {/* Overtake eligibility — why it is/isn't available, never implying the
+              driver's button press is observed. */}
+          {model.entry.energyEligibilityReason != null && (
+            <div
+              className="flex items-center gap-2 rounded-lg border border-hairline/15 bg-black/20 px-2 py-1 text-2xs"
+              title={model.entry.energyEligibilityReason}
+            >
+              <span className="text-[9px] uppercase tracking-wide text-fg-subtle">Overtake</span>
+              <span
+                className={cn(
+                  'truncate',
+                  model.entry.deployMode === 'OVERTAKE' ? 'text-good' : 'text-fg-muted'
+                )}
+              >
+                {model.entry.energyEligibilityReason}
+                {model.entry.energyEligibleForSec != null &&
+                  ` · ${model.entry.energyEligibleForSec.toFixed(0)}s`}
+              </span>
+            </div>
+          )}
+
+          <PitHistoryPanel stops={model.pitHistory} />
+
+          {model.radioClips.length > 0 && <DossierRadioList clips={model.radioClips} />}
 
           {/* Strategy chips */}
           <div className="grid grid-cols-2 gap-1.5">

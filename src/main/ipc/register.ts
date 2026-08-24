@@ -1,7 +1,14 @@
 import { ipcMain, shell, app, BrowserWindow, dialog } from 'electron'
 import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { IPC, type AppInfo, type CaptureResult, type SetVideoModeRequest, type SurfaceBounds } from '@shared/ipc-contract'
+import {
+  IPC,
+  type AppInfo,
+  type CaptureResult,
+  type DebriefFormat,
+  type SetVideoModeRequest,
+  type SurfaceBounds
+} from '@shared/ipc-contract'
 import type { AiCompletionRequest } from '@shared/ai'
 import type { MarketWinnerRequest, MarketHistoryRequest } from '@shared/market'
 import { APP_NAME } from '@shared/constants'
@@ -65,6 +72,35 @@ export function registerIpc(deps: IpcDeps): void {
     return { saved: true, path: filePath }
   })
 
+  ipcMain.handle(
+    IPC.APP_EXPORT_DEBRIEF,
+    async (
+      e,
+      content: string,
+      format: DebriefFormat,
+      defaultName?: string
+    ): Promise<CaptureResult> => {
+      const win = BrowserWindow.fromWebContents(e.sender)
+      if (!win) return { saved: false }
+      const extension = format === 'json' ? 'json' : 'md'
+      const { canceled, filePath } = await dialog.showSaveDialog(win, {
+        title: 'Export race debrief',
+        defaultPath: join(
+          app.getPath('documents'),
+          defaultName ?? `racedeck-debrief-${Date.now()}.${extension}`
+        ),
+        filters: [
+          format === 'json'
+            ? { name: 'JSON', extensions: ['json'] }
+            : { name: 'Markdown', extensions: ['md'] }
+        ]
+      })
+      if (canceled || !filePath) return { saved: false }
+      await writeFile(filePath, content, 'utf-8')
+      return { saved: true, path: filePath }
+    }
+  )
+
   // ── Window controls (frameless custom title bar) ───────────────────
   ipcMain.on(IPC.WINDOW_MINIMIZE, (e) => BrowserWindow.fromWebContents(e.sender)?.minimize())
   ipcMain.on(IPC.WINDOW_MAXIMIZE_TOGGLE, (e) => {
@@ -102,7 +138,9 @@ export function registerIpc(deps: IpcDeps): void {
   ipcMain.handle(IPC.STANDINGS_SEASON, (_e, req: unknown) => standings.getChampionship(req))
 
   // ── Practice intelligence ──────────────────────────────────────────
-  ipcMain.handle(IPC.PRACTICE_BRIEFING, (_e, req: unknown) => practice.briefing(validatePracticeBriefRequest(req)))
+  ipcMain.handle(IPC.PRACTICE_BRIEFING, (_e, req: unknown) =>
+    practice.briefing(validatePracticeBriefRequest(req))
+  )
   ipcMain.handle(IPC.PRACTICE_OPEN_SOURCE, async (_e, rawUrl: string) => {
     let url: URL
     try {
@@ -131,7 +169,9 @@ export function registerIpc(deps: IpcDeps): void {
   // ── F1 official live-timing archive ────────────────────────────────
   ipcMain.handle(IPC.F1_LIST_SESSIONS, (_e, year: number) => f1.listSessions(year))
   ipcMain.handle(IPC.F1_LOAD_SESSION, (_e, path: string) => f1.loadSession(path))
-  ipcMain.handle(IPC.F1_LOAD_SESSION_ENRICHMENT, (_e, req: unknown) => f1.loadSessionEnrichmentChunk(req))
+  ipcMain.handle(IPC.F1_LOAD_SESSION_ENRICHMENT, (_e, req: unknown) =>
+    f1.loadSessionEnrichmentChunk(req)
+  )
 
   // ── F1 live timing (SignalR Core) ──────────────────────────────────
   // Timing is a public stream; car telemetry (CarData.z) and positions
@@ -149,7 +189,9 @@ export function registerIpc(deps: IpcDeps): void {
   })
   ipcMain.on(IPC.F1_DISCONNECT_LIVE, () => f1socket.disconnect())
   ipcMain.handle(IPC.F1_LIVE_STATUS, () => f1socket.getStatus())
-  ipcMain.handle(IPC.F1_GET_LIVE, (_e, cursors?: Record<string, number>, generation?: number) => f1socket.getData(cursors, generation))
+  ipcMain.handle(IPC.F1_GET_LIVE, (_e, cursors?: Record<string, number>, generation?: number) =>
+    f1socket.getData(cursors, generation)
+  )
 
   // ── Persistence ────────────────────────────────────────────────────
   ipcMain.handle(IPC.STORE_GET, (_e, ns: string, key: string) => store.get(ns, key))

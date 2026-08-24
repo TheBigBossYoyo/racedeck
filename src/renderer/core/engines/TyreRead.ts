@@ -15,7 +15,10 @@
 import type { LapSample, TimingEntry, TyreCompound, TyreStintRecord } from '@shared/models'
 import type { RaceSnapshot } from '@renderer/core/providers/types'
 import { StrategyEngine, fuelCorrectedLapTimes } from '@renderer/core/engines/StrategyEngine'
-import { classifyCloseTraffic } from '@renderer/core/engines/PitCycleModel'
+import {
+  classifyTrackContamination,
+  type ContaminationReason
+} from '@renderer/core/engines/PitCycleModel'
 import { compoundModel } from '@renderer/core/engines/AnalyticsEngine'
 import { estimateFuelCoefficient } from '@renderer/core/engines/FuelModel'
 import { reconcileTyreHistory } from '@renderer/core/providers/f1normalize'
@@ -94,6 +97,13 @@ export interface TyreReadModel {
    * clean laps to show, matching `stint`'s own emptiness.
    */
   readonly sparklineLaps: readonly { lapNumber: number; correctedSec: number }[]
+
+  /**
+   * Why `degradationBlocker` is `'traffic'`, in more specific terms than the
+   * single bare label — e.g. `['close-traffic', 'train']` vs `['neutralized']`.
+   * Empty when the blocker isn't traffic.
+   */
+  readonly contaminationReasons: readonly ContaminationReason[]
 }
 
 /** Clean, representative laps: real times, no in/out laps. */
@@ -145,7 +155,7 @@ export function buildTyreRead(
   // Traffic contaminates the pace trend: a car held up behind another is slow
   // for a reason that has nothing to do with its tyres, and reporting that as
   // degradation is exactly the misread this panel exists to avoid.
-  const traffic = classifyCloseTraffic(snapshot, entry)
+  const contamination = classifyTrackContamination(snapshot, entry)
   // Fuel-corrected, and not optionally so: `fieldDegradationPerLap` below comes
   // from AnalyticsEngine, which already corrects. Comparing a raw driver slope
   // against a corrected field slope would be apples to oranges, and the burn-off
@@ -159,7 +169,7 @@ export function buildTyreRead(
 
   let degradationPerLap: number | null = null
   let degradationBlocker: DegradationBlocker = null
-  if (traffic.isCloseTraffic) {
+  if (contamination.isContaminated) {
     degradationBlocker = 'traffic'
   } else if (rawSlope == null) {
     degradationBlocker = 'insufficient-laps'
@@ -204,7 +214,8 @@ export function buildTyreRead(
     priorStintLaps,
     ageIsDirect: !reconciliation.inferred,
     stintHistory: history?.stints ?? null,
-    sparklineLaps
+    sparklineLaps,
+    contaminationReasons: degradationBlocker === 'traffic' ? contamination.reasons : []
   }
 }
 

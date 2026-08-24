@@ -422,9 +422,68 @@ export function applyOvertakeEligibility(
   mode: EnergyMode | null,
   intervalAhead: number | '+1 LAP' | null
 ): EnergyMode | null {
-  const eligible =
-    typeof intervalAhead === 'number' && intervalAhead > 0 && intervalAhead <= 1
+  const eligible = typeof intervalAhead === 'number' && intervalAhead > 0 && intervalAhead <= 1
   return eligible && (mode === 'BOOST' || mode === 'DEPLOY') ? 'OVERTAKE' : mode
+}
+
+// ── Overtake eligibility explanation (APP_IMPROVEMENT_ROADMAP.md P2 item 25) ──
+
+const OVERTAKE_MAX_GAP_SEC = 1
+
+/**
+ * Why Overtake Mode is or isn't available right now. Never implies the
+ * driver's button press is observed — only the timing-interval eligibility
+ * and the modelled deployment allowance, exactly what `applyOvertakeEligibility`
+ * itself is allowed to know.
+ */
+export function explainOvertakeEligibility(
+  mode: EnergyMode | null,
+  intervalAhead: number | '+1 LAP' | null,
+  deployBudgetRemainingPct: number | null
+): { eligible: boolean; reason: string } {
+  if (typeof intervalAhead !== 'number') {
+    return { eligible: false, reason: 'No car ahead on the road to target.' }
+  }
+  if (intervalAhead <= 0 || intervalAhead > OVERTAKE_MAX_GAP_SEC) {
+    return {
+      eligible: false,
+      reason: `${intervalAhead.toFixed(1)}s behind car ahead — need ≤${OVERTAKE_MAX_GAP_SEC.toFixed(1)}s.`
+    }
+  }
+  if (deployBudgetRemainingPct != null && deployBudgetRemainingPct <= 0) {
+    return {
+      eligible: false,
+      reason: 'Within range, but this lap’s deployment allowance is spent.'
+    }
+  }
+  if (mode === 'OVERTAKE') {
+    return { eligible: true, reason: `Eligible — ${intervalAhead.toFixed(1)}s behind car ahead.` }
+  }
+  return {
+    eligible: true,
+    reason: `Gap eligible (${intervalAhead.toFixed(1)}s) — not currently deploying.`
+  }
+}
+
+/**
+ * How long a driver's Overtake eligibility has held, from the clock it most
+ * recently began.
+ *
+ * Deliberately NOT a replayable timeline like `ersPoints`: `intervalAhead` at
+ * past moments isn't retained anywhere in this app (it comes from the timing
+ * feed's live/on-demand snapshot, not a precomputed forward sweep like CarData
+ * is), so a scrub-anywhere-accurate duration isn't honestly reconstructable.
+ * The caller (`F1LiveProvider.attachErs`) tracks only "the clock eligibility
+ * last started" per driver, which is accurate during forward playback — the
+ * normal way a session is watched — and simply returns null rather than a
+ * fabricated number after a backward scrub past that marker.
+ */
+export function eligibilityDurationSec(
+  eligibleSinceClock: number | undefined,
+  clock: number
+): number | null {
+  if (eligibleSinceClock == null || clock < eligibleSinceClock) return null
+  return clock - eligibleSinceClock
 }
 
 /** How far the integration has moved past its seed value. */
@@ -525,6 +584,10 @@ export function deriveEnergyTrend(
 
   const deltaPct = latestPct - earliestPct
   const direction: EnergyTrendDirection =
-    deltaPct > TREND_DEADBAND_PCT ? 'charging' : deltaPct < -TREND_DEADBAND_PCT ? 'draining' : 'stable'
+    deltaPct > TREND_DEADBAND_PCT
+      ? 'charging'
+      : deltaPct < -TREND_DEADBAND_PCT
+        ? 'draining'
+        : 'stable'
   return { direction, deltaPct }
 }

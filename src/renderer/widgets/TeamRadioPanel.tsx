@@ -1,9 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useMemo } from 'react'
 import { Radio, Play, Pause } from 'lucide-react'
 import { WidgetFrame } from '@renderer/components/ui/WidgetFrame'
 import { EmptyState } from '@renderer/components/ui/primitives'
 import { useSessionStore } from '@renderer/store/sessionStore'
 import { useSettingsStore } from '@renderer/store/settingsStore'
+import { useRadioPlaybackStore } from '@renderer/store/radioPlaybackStore'
+import { seekToRadioClip } from '@renderer/lib/seekToRadioClip'
 import { hexColor } from '@renderer/lib/utils'
 import { cn } from '@renderer/lib/utils'
 
@@ -15,8 +17,11 @@ import { cn } from '@renderer/lib/utils'
  * audio/mpeg) even though the sibling `.jsonStream` files 403 until the archive
  * is published — so radio is available live, not just in replay.
  *
- * Playback is deliberately one-at-a-time: starting a clip stops any other, so
- * the panel never talks over itself or over the video widget's audio.
+ * Playback is deliberately one-at-a-time across the whole dashboard (shared
+ * via `radioPlaybackStore`, not local state) — starting a clip stops any
+ * other, including one playing from `DriverDossier`'s per-driver radio list.
+ * Clicking a clip also seeks replay to its broadcast moment
+ * (APP_IMPROVEMENT_ROADMAP.md P2 item 23).
  */
 
 /** Clock time of a capture in the session's local presentation (HH:MM). */
@@ -29,8 +34,8 @@ function clockOf(utc: string): string {
 export function TeamRadioPanel() {
   const snapshot = useSessionStore((s) => s.snapshot)
   const favorites = useSettingsStore((s) => s.favorites)
-  const [playing, setPlaying] = useState<string | null>(null)
-  const audioRef = useRef<HTMLAudioElement | null>(null)
+  const playingUrl = useRadioPlaybackStore((s) => s.playingUrl)
+  const togglePlayback = useRadioPlaybackStore((s) => s.toggle)
 
   const clips = snapshot?.teamRadio ?? []
 
@@ -45,27 +50,9 @@ export function TeamRadioPanel() {
     })
   }, [clips, favorites])
 
-  // Stop playback when the panel unmounts so audio never outlives the widget.
-  useEffect(() => {
-    return () => {
-      audioRef.current?.pause()
-      audioRef.current = null
-    }
-  }, [])
-
-  const toggle = (url: string): void => {
-    if (playing === url) {
-      audioRef.current?.pause()
-      setPlaying(null)
-      return
-    }
-    audioRef.current?.pause()
-    const audio = new Audio(url)
-    audio.addEventListener('ended', () => setPlaying(null))
-    audio.addEventListener('error', () => setPlaying(null))
-    audioRef.current = audio
-    setPlaying(url)
-    void audio.play().catch(() => setPlaying(null))
+  const play = (url: string, utc: string): void => {
+    togglePlayback(url)
+    seekToRadioClip(utc)
   }
 
   const driverOf = (num: number) => snapshot?.drivers.find((d) => d.number === num)
@@ -81,11 +68,11 @@ export function TeamRadioPanel() {
         <div className="flex flex-col gap-1 overflow-y-auto p-1">
           {ordered.map((clip) => {
             const driver = driverOf(clip.driverNumber)
-            const isPlaying = playing === clip.url
+            const isPlaying = playingUrl === clip.url
             return (
               <button
                 key={clip.url}
-                onClick={() => toggle(clip.url)}
+                onClick={() => play(clip.url, clip.utc)}
                 className={cn(
                   'flex items-center gap-2 rounded-lg border px-2 py-1.5 text-left transition-colors',
                   isPlaying

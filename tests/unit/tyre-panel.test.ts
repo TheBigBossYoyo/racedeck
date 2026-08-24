@@ -24,6 +24,7 @@ function tyreRead(overrides: Partial<TyreReadModel> = {}): TyreReadModel {
     ageIsDirect: false,
     stintHistory: null,
     sparklineLaps: [],
+    contaminationReasons: [],
     ...overrides
   }
 }

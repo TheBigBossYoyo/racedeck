@@ -48,6 +48,8 @@ interface SessionStoreState {
   timeline: SessionTimeline | null
   /** Whole-session clickable markers (start, SC/VSC, pits, lead changes, penalties, radio, fastest lap). */
   bookmarks: RaceBookmark[]
+  /** Most recent explicit seek targets (data-clock seconds), newest first, capped at 8. */
+  recentSeeks: number[]
 
   focusDriver: number | null
   comparison: [number, number] | null
@@ -77,6 +79,8 @@ interface SessionStoreState {
   getDriverLaps: (n: number) => ReturnType<DataProviderManager['getDriverLaps']>
   getTelemetry: (n: number, windowSec?: number) => ReturnType<DataProviderManager['getTelemetry']>
   getRaceControlHistory: () => RaceControlMessage[]
+  /** Whole-session snapshot (not the current playhead) — for exports/bookmarks. */
+  getFullSnapshot: () => RaceSnapshot | null
 }
 
 export const useSessionStore = create<SessionStoreState>((set, get) => ({
@@ -95,6 +99,7 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
   snapshot: null,
   timeline: null,
   bookmarks: [],
+  recentSeeks: [],
 
   focusDriver: null,
   comparison: null,
@@ -121,6 +126,7 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
         snapshot: null,
         timeline: null,
         bookmarks: [],
+        recentSeeks: [],
         loadingSession: false,
         error: null
       })
@@ -184,6 +190,7 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
         clock: startClock,
         timeline,
         bookmarks,
+        recentSeeks: [],
         loadingSession: false,
         focusDriver: null,
         comparison: null
@@ -268,7 +275,9 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
 
   seek: (t) => {
     const duration = get().duration
-    set({ clock: clamp(t, 0, duration) })
+    const clock = clamp(t, 0, duration)
+    const recentSeeks = [clock, ...get().recentSeeks.filter((s) => s !== clock)].slice(0, 8)
+    set({ clock, recentSeeks })
     get().recompute()
   },
 
@@ -317,6 +326,11 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
     const duration = get().duration
     if (duration <= 0) return []
     return manager.getSnapshotAt(duration).raceControl
+  },
+  getFullSnapshot: () => {
+    const duration = get().duration
+    if (duration <= 0) return null
+    return manager.getSnapshotAt(duration)
   }
 }))
 

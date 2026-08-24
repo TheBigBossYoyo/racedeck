@@ -6,6 +6,8 @@ import { useAppStore, type Route } from '@renderer/store/appStore'
 import { useSettingsStore } from '@renderer/store/settingsStore'
 import { useOnboardingStore } from '@renderer/store/onboardingStore'
 import { pickDriver } from '@renderer/lib/useFocusDriver'
+import { hasBridge, bridge } from '@renderer/lib/ipc'
+import { buildDebrief, debriefToMarkdown } from '@renderer/core/engines/DebriefBuilder'
 import {
   LAYOUT_ORDER,
   LAYOUT_PRESETS,
@@ -14,7 +16,7 @@ import {
 } from '@renderer/core/engines/LayoutManager'
 import type { ColorVision, ThemeMode } from '@renderer/core/engines/ThemeEngine'
 import type { Driver } from '@shared/models'
-import { cn } from '@renderer/lib/utils'
+import { cn, formatDuration } from '@renderer/lib/utils'
 
 /** Stable empty reference — a selector must never return a fresh array each call. */
 const NO_DRIVERS: Driver[] = []
@@ -37,7 +39,8 @@ export interface Command {
 
 function scoreCommand(command: Command, query: string): number {
   const label = command.label.toLowerCase()
-  const haystack = `${label} ${command.hint ?? ''} ${command.keywords ?? ''} ${command.group}`.toLowerCase()
+  const haystack =
+    `${label} ${command.hint ?? ''} ${command.keywords ?? ''} ${command.group}`.toLowerCase()
   if (label === query) return 100
   if (label.startsWith(query)) return 80
   if (label.includes(query)) return 60
@@ -116,39 +119,161 @@ export function CommandPalette() {
 
     const list: Command[] = []
     for (const { route, label } of ROUTES) {
-      list.push({ id: `go-${route}`, group: 'Go to', label: `Go to ${label}`, keywords: 'navigate open view', run: wrap(() => app.setRoute(route)) })
+      list.push({
+        id: `go-${route}`,
+        group: 'Go to',
+        label: `Go to ${label}`,
+        keywords: 'navigate open view',
+        run: wrap(() => app.setRoute(route))
+      })
     }
     for (const id of LAYOUT_ORDER) {
       const name = LAYOUT_PRESETS[id]?.name ?? id
       list.push({
-        id: `layout-${id}`, group: 'Workspace', label: `Workspace: ${name}`, keywords: 'layout switch',
+        id: `layout-${id}`,
+        group: 'Workspace',
+        label: `Workspace: ${name}`,
+        keywords: 'layout switch',
         run: wrap(() => {
           layout.setLayout(id)
           if (app.route !== 'dashboard' && app.route !== 'replay') app.setRoute('dashboard')
         })
       })
     }
-    list.push({ id: 'play', group: 'Playback', label: session.playing ? 'Pause' : 'Play', keywords: 'space start stop', run: wrap(() => session.togglePlay()) })
-    list.push({ id: 'restart', group: 'Playback', label: 'Jump to session start', keywords: 'seek beginning', run: wrap(() => session.seek(0)) })
-    list.push({ id: 'edit', group: 'Workspace', label: layout.editMode ? 'Exit edit mode' : 'Edit layout (drag/resize)', keywords: 'move widgets', run: wrap(() => layout.toggleEdit()) })
+    list.push({
+      id: 'play',
+      group: 'Playback',
+      label: session.playing ? 'Pause' : 'Play',
+      keywords: 'space start stop',
+      run: wrap(() => session.togglePlay())
+    })
+    list.push({
+      id: 'restart',
+      group: 'Playback',
+      label: 'Jump to session start',
+      keywords: 'seek beginning',
+      run: wrap(() => session.seek(0))
+    })
+    list.push({
+      id: 'edit',
+      group: 'Workspace',
+      label: layout.editMode ? 'Exit edit mode' : 'Edit layout (drag/resize)',
+      keywords: 'move widgets',
+      run: wrap(() => layout.toggleEdit())
+    })
 
     for (const { mode, label } of THEME_MODES) {
-      list.push({ id: `theme-${mode}`, group: 'Appearance', label: `Theme: ${label}`, keywords: 'colour scheme dark light', run: wrap(() => settings.setTheme({ mode })) })
+      list.push({
+        id: `theme-${mode}`,
+        group: 'Appearance',
+        label: `Theme: ${label}`,
+        keywords: 'colour scheme dark light',
+        run: wrap(() => settings.setTheme({ mode }))
+      })
     }
     for (const { vision, label } of COLOR_VISIONS) {
-      list.push({ id: `vision-${vision}`, group: 'Accessibility', label, keywords: 'colour blind deficiency accessible tyre', run: wrap(() => settings.setTheme({ colorVision: vision })) })
+      list.push({
+        id: `vision-${vision}`,
+        group: 'Accessibility',
+        label,
+        keywords: 'colour blind deficiency accessible tyre',
+        run: wrap(() => settings.setTheme({ colorVision: vision }))
+      })
     }
-    list.push({ id: 'voice', group: 'Accessibility', label: settings.voice.enabled ? 'Voice read-out: off' : 'Voice read-out: on', keywords: 'speak notes audio', run: wrap(() => settings.setVoice({ enabled: !settings.voice.enabled })) })
-    list.push({ id: 'tour', group: 'Help', label: 'Show welcome tour', keywords: 'onboarding guide intro help', run: wrap(() => useOnboardingStore.getState().openTour()) })
+    list.push({
+      id: 'voice',
+      group: 'Accessibility',
+      label: settings.voice.enabled ? 'Voice read-out: off' : 'Voice read-out: on',
+      keywords: 'speak notes audio',
+      run: wrap(() => settings.setVoice({ enabled: !settings.voice.enabled }))
+    })
+    list.push({
+      id: 'tour',
+      group: 'Help',
+      label: 'Show welcome tour',
+      keywords: 'onboarding guide intro help',
+      run: wrap(() => useOnboardingStore.getState().openTour())
+    })
 
+    if (hasBridge()) {
+      list.push({
+        id: 'export-debrief',
+        group: 'Export',
+        label: 'Export race debrief (Markdown)',
+        keywords: 'download save summary report',
+        run: wrap(() => {
+          const full = session.getFullSnapshot()
+          if (!full) return
+          const debrief = buildDebrief(full, session.bookmarks)
+          void bridge().app.exportDebrief(
+            debriefToMarkdown(debrief),
+            'md',
+            `racedeck-debrief-${Date.now()}.md`
+          )
+        })
+      })
+      list.push({
+        id: 'export-debrief-json',
+        group: 'Export',
+        label: 'Export race debrief (JSON)',
+        keywords: 'download save summary report data',
+        run: wrap(() => {
+          const full = session.getFullSnapshot()
+          if (!full) return
+          const debrief = buildDebrief(full, session.bookmarks)
+          void bridge().app.exportDebrief(
+            JSON.stringify(debrief, null, 2),
+            'json',
+            `racedeck-debrief-${Date.now()}.json`
+          )
+        })
+      })
+    }
+
+    // Recent seeks first (APP_IMPROVEMENT_ROADMAP.md P2 item 26) — shown at the
+    // top of the unfiltered list, the same way an empty-query palette already
+    // lists everything else in the order it was pushed.
+    for (const t of session.recentSeeks) {
+      list.push({
+        id: `recent-${t}`,
+        group: 'Recent',
+        label: `Resume at ${formatDuration(t)}`,
+        keywords: 'recent last seek jump',
+        run: wrap(() => session.seek(t))
+      })
+    }
+    for (const bookmark of session.bookmarks) {
+      list.push({
+        id: `bookmark-${bookmark.kind}-${bookmark.t}`,
+        group: 'Jump to',
+        label: `Jump to: ${bookmark.label} (${formatDuration(bookmark.t)})`,
+        keywords: `bookmark event ${bookmark.kind}`,
+        run: wrap(() => session.seek(bookmark.t))
+      })
+    }
     for (const driver of drivers) {
-      const name = [driver.firstName, driver.lastName].filter(Boolean).join(' ') || driver.fullName || driver.code
-      list.push({ id: `focus-${driver.number}`, group: 'Focus driver', label: `Focus ${driver.code} — ${name}`, keywords: `${driver.number} ${driver.teamName ?? ''}`, run: wrap(() => pickDriver(driver.number)) })
+      const name =
+        [driver.firstName, driver.lastName].filter(Boolean).join(' ') ||
+        driver.fullName ||
+        driver.code
+      list.push({
+        id: `focus-${driver.number}`,
+        group: 'Focus driver',
+        label: `Focus ${driver.code} — ${name}`,
+        keywords: `${driver.number} ${driver.teamName ?? ''}`,
+        run: wrap(() => pickDriver(driver.number))
+      })
     }
     for (const key of Object.keys(WIDGET_CATALOG) as WidgetKey[]) {
       const meta = WIDGET_CATALOG[key]
       if (meta.isVideo) continue
-      list.push({ id: `add-${key}`, group: 'Add widget', label: `Add ${meta.title}`, keywords: 'panel insert', run: wrap(() => layout.addWidget(key)) })
+      list.push({
+        id: `add-${key}`,
+        group: 'Add widget',
+        label: `Add ${meta.title}`,
+        keywords: 'panel insert',
+        run: wrap(() => layout.addWidget(key))
+      })
     }
     return list
   }, [drivers])
@@ -198,7 +323,9 @@ export function CommandPalette() {
             className="min-w-0 flex-1 bg-transparent text-sm text-fg placeholder:text-fg-subtle focus:outline-none"
             aria-label="Search commands"
           />
-          <kbd className="rounded border border-hairline/30 px-1.5 py-0.5 text-2xs text-fg-subtle">Esc</kbd>
+          <kbd className="rounded border border-hairline/30 px-1.5 py-0.5 text-2xs text-fg-subtle">
+            Esc
+          </kbd>
         </div>
 
         <ul className="max-h-[52vh] overflow-y-auto py-1.5" role="listbox">
@@ -212,7 +339,9 @@ export function CommandPalette() {
                   onClick={() => runAt(i)}
                   className={cn(
                     'flex w-full items-center gap-2 px-3.5 py-2 text-left text-sm transition-colors',
-                    i === clampedIndex ? 'bg-accent/15 text-fg' : 'text-fg-muted hover:bg-white/[0.03]'
+                    i === clampedIndex
+                      ? 'bg-accent/15 text-fg'
+                      : 'text-fg-muted hover:bg-white/[0.03]'
                   )}
                 >
                   <CommandIcon className="h-3.5 w-3.5 shrink-0 text-fg-subtle" />

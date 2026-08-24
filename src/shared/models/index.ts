@@ -184,6 +184,15 @@ export interface TimingEntry {
   energyTrendDeltaPct?: number | null
   /** Percentage of this lap's deployment allowance still unspent, 0-100. */
   energyDeployBudgetPct?: number
+  /**
+   * Contiguous seconds Overtake eligibility has held, from `ErsEstimator.eligibilityDurationSec`.
+   * Null/undefined when not currently eligible or not yet observed this playthrough
+   * (a backward scrub past the eligibility start returns null rather than a
+   * fabricated figure — see that function's doc comment).
+   */
+  energyEligibleForSec?: number | null
+  /** Human-readable reason Overtake is/isn't available, from `ErsEstimator.explainOvertakeEligibility`. */
+  energyEligibilityReason?: string | null
 }
 
 /**

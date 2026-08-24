@@ -562,3 +562,62 @@ describe('estimatePitLoss', () => {
     expect(estimatePitLoss(laps)).toBeNull()
   })
 })
+
+describe('StrategyEngine.buildPitScenarios', () => {
+  it('returns all four scenario ids with box-now as the zero-delta baseline', () => {
+    const snap = makeSnapshot([0, 2, 5, 25, 28, 40])
+    const scenarios = StrategyEngine.buildPitScenarios(snap, 2, [], 3, 21.5)
+    expect(scenarios.map((s) => s.id)).toEqual([
+      'box-now',
+      'box-plus-n',
+      'box-neutralized',
+      'stay-out'
+    ])
+    const boxNow = scenarios.find((s) => s.id === 'box-now')!
+    expect(boxNow.deltaVsBoxNowSec).toBe(0)
+    expect(boxNow.isHypothetical).toBe(false)
+    expect(boxNow.prediction).not.toBeNull()
+  })
+
+  it('marks box-neutralized as hypothetical on a green track and non-hypothetical under an actual SC', () => {
+    const green = makeSnapshot([0, 2, 5, 25, 28, 40])
+    const greenScenarios = StrategyEngine.buildPitScenarios(green, 2, [], 3, 21.5)
+    const greenNeutralized = greenScenarios.find((s) => s.id === 'box-neutralized')!
+    expect(greenNeutralized.isHypothetical).toBe(true)
+    // Hypothetical SC pit loss is discounted vs the real green-flag cost.
+    expect(greenNeutralized.deltaVsBoxNowSec).toBeLessThan(0)
+
+    const underSc = makeSnapshot([0, 2, 5, 25, 28, 40], 'SAFETY_CAR')
+    const scScenarios = StrategyEngine.buildPitScenarios(underSc, 3, [], 3, 21.5)
+    const scNeutralized = scScenarios.find((s) => s.id === 'box-neutralized')!
+    expect(scNeutralized.isHypothetical).toBe(false)
+    expect(scNeutralized.deltaVsBoxNowSec).toBe(0)
+    expect(scNeutralized.prediction).toBe(scScenarios.find((s) => s.id === 'box-now')!.prediction)
+  })
+
+  it('projects a positive box-plus-n cost from the measured degradation slope', () => {
+    const snap = makeSnapshot([0, 2, 5, 25, 28, 40], 'CLEAR', { stintAge: 20 })
+    const laps = degradingLaps(6, 90, 0.3)
+    const scenarios = StrategyEngine.buildPitScenarios(snap, 2, laps, 3, 21.5)
+    const plusN = scenarios.find((s) => s.id === 'box-plus-n')!
+    expect(plusN.isHypothetical).toBe(true)
+    expect(plusN.deltaVsBoxNowSec).not.toBeNull()
+    expect(plusN.deltaVsBoxNowSec!).toBeGreaterThan(0)
+  })
+
+  it('returns a null box-plus-n delta without enough clean-lap data', () => {
+    const snap = makeSnapshot([0, 2, 5, 25, 28, 40])
+    const scenarios = StrategyEngine.buildPitScenarios(snap, 2, [], 3, 21.5)
+    const plusN = scenarios.find((s) => s.id === 'box-plus-n')!
+    expect(plusN.deltaVsBoxNowSec).toBeNull()
+  })
+
+  it('gives stay-out a null delta and a rationale explaining the tradeoff', () => {
+    const snap = makeSnapshot([0, 2, 5, 25, 28, 40])
+    const scenarios = StrategyEngine.buildPitScenarios(snap, 2, [], 3, 21.5)
+    const stayOut = scenarios.find((s) => s.id === 'stay-out')!
+    expect(stayOut.deltaVsBoxNowSec).toBeNull()
+    expect(stayOut.isHypothetical).toBe(false)
+    expect(stayOut.rationale.length).toBeGreaterThan(0)
+  })
+})

@@ -7,7 +7,14 @@ import type {
   MarketHistoryResult,
   MarketSearchResult
 } from './market'
-import type { F1SessionSummary, F1SessionData, F1SessionEnrichmentRequest, F1SessionEnrichmentChunk, F1LiveDataDelta, LiveStatus } from './f1live'
+import type {
+  F1SessionSummary,
+  F1SessionData,
+  F1SessionEnrichmentRequest,
+  F1SessionEnrichmentChunk,
+  F1LiveDataDelta,
+  LiveStatus
+} from './f1live'
 import type { PracticeBriefRequest, PracticeBriefResult } from './practice'
 import type { StandingsRequest, StandingsResult } from './standings'
 
@@ -28,6 +35,7 @@ export const IPC = {
   // ── App / diagnostics ──────────────────────────────────────────────
   APP_INFO: 'app:info',
   APP_CAPTURE_PNG: 'app:capture-png',
+  APP_EXPORT_DEBRIEF: 'app:export-debrief',
   WINDOW_MINIMIZE: 'window:minimize',
   WINDOW_MAXIMIZE_TOGGLE: 'window:maximize-toggle',
   WINDOW_CLOSE: 'window:close',
@@ -121,12 +129,21 @@ export interface CaptureResult {
   path?: string
 }
 
+/** File format the user picked in the export save dialog. */
+export type DebriefFormat = 'md' | 'json'
+
 /** The typed API exposed on `window.racedeck`. */
 export interface RaceDeckApi {
   app: {
     info(): Promise<AppInfo>
     /** Capture the current dashboard to a PNG the user chooses to save. */
     capturePng(defaultName?: string): Promise<CaptureResult>
+    /** Save a race debrief (Markdown or JSON) the user chooses where to write. */
+    exportDebrief(
+      content: string,
+      format: DebriefFormat,
+      defaultName?: string
+    ): Promise<CaptureResult>
   }
   window: {
     minimize(): void

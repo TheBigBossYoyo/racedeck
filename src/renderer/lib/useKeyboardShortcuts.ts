@@ -13,6 +13,7 @@ import { LAYOUT_ORDER } from '@renderer/core/engines/LayoutManager'
  *   + / −            sync offset ±1s    (Shift: ±5s)
  *   1–6              switch workspace layout
  *   E                toggle edit (drag/resize) mode
+ *   N / Shift+N      jump to next / previous bookmark (SC, pits, radio, ...)
  *
  * Shortcuts are suppressed while typing in inputs or when an interactive
  * control (button/menu/slider) owns focus, so they never fight the UI.
@@ -31,7 +32,9 @@ export function useKeyboardShortcuts(): void {
       // Let focused interactive controls keep their native Space/Enter behavior.
       if (
         (e.key === ' ' || e.key === 'Enter') &&
-        target?.closest('button, a, [role="menuitem"], [role="switch"], [role="slider"], [role="tab"]')
+        target?.closest(
+          'button, a, [role="menuitem"], [role="switch"], [role="slider"], [role="tab"]'
+        )
       ) {
         return
       }
@@ -73,6 +76,18 @@ export function useKeyboardShortcuts(): void {
         case 'E':
           useLayoutStore.getState().toggleEdit()
           break
+        case 'n':
+        case 'N': {
+          // Bookmarks are sorted ascending by `t` (RaceBookmarks.buildRaceBookmarks).
+          const bookmarks = session.bookmarks
+          if (bookmarks.length === 0) break
+          const clock = session.clock
+          const target = e.shiftKey
+            ? [...bookmarks].reverse().find((b) => b.t < clock - 0.5)
+            : bookmarks.find((b) => b.t > clock + 0.5)
+          if (target) session.seek(target.t)
+          break
+        }
         case '1':
         case '2':
         case '3':

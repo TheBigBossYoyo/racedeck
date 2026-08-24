@@ -386,6 +386,28 @@ export interface PitPrediction {
   isEstimate: true
 }
 
+/**
+ * One entry in a side-by-side pit-decision comparison (APP_IMPROVEMENT_ROADMAP.md
+ * P2 item 21). `box-now` and `box-neutralized` carry a full `PitPrediction`
+ * (the latter by literally re-running `predictPitStop` under a hypothetical
+ * neutralized snapshot — reusing its real verdict/rationale logic rather than
+ * fabricating a second model). `box-plus-n` and `stay-out` are simpler derived
+ * comparisons: extending `predictPitStop`'s own "assumes every other car holds
+ * station" simplification into a fabricated future field state would be less
+ * honest, not more.
+ */
+export interface PitScenario {
+  id: 'box-now' | 'box-plus-n' | 'box-neutralized' | 'stay-out'
+  label: string
+  /** Full projection for box-now / box-neutralized; null for the derived scenarios. */
+  prediction: PitPrediction | null
+  /** Net seconds vs boxing now; positive = costs more, negative = saves. Null when not comparable. */
+  deltaVsBoxNowSec: number | null
+  rationale: string[]
+  /** True when this scenario doesn't reflect the track's actual current state. */
+  isHypothetical: boolean
+}
+
 // ── gap helpers ────────────────────────────────────────────────────────────────
 
 /** Numeric gap-to-leader in seconds, or null when unknown / lapped. */
@@ -802,6 +824,89 @@ export const StrategyEngine = {
       confidence,
       rationale
     }
+  },
+
+  /**
+   * Compare "box now" against three alternatives so the UI doesn't hide close
+   * calls behind one recommendation (APP_IMPROVEMENT_ROADMAP.md P2 item 21).
+   */
+  buildPitScenarios(
+    snapshot: RaceSnapshot,
+    driverNumber: number,
+    laps: LapSample[],
+    offsetLaps = 3,
+    greenPitLoss = circuitPitLoss(snapshot).seconds
+  ): PitScenario[] {
+    const boxNow = this.predictPitStop(snapshot, driverNumber, laps, greenPitLoss)
+
+    const alreadyNeutralized =
+      snapshot.trackStatus === 'SAFETY_CAR' || snapshot.trackStatus === 'VSC'
+    const boxNeutralized = alreadyNeutralized
+      ? boxNow
+      : this.predictPitStop(
+          { ...snapshot, trackStatus: 'SAFETY_CAR' },
+          driverNumber,
+          laps,
+          greenPitLoss
+        )
+
+    const extraLossSec =
+      boxNow.degradationSlope != null ? boxNow.degradationSlope * offsetLaps : null
+
+    const stayOutRationale =
+      boxNow.verdict === 'STAY OUT'
+        ? boxNow.rationale
+        : [
+            `Staying out avoids an immediate ~${boxNow.pitLossSec.toFixed(0)}s pit loss` +
+              (boxNow.degradationSlope != null
+                ? `, but the tyre keeps degrading at ~${boxNow.degradationSlope.toFixed(2)}s/lap.`
+                : '.')
+          ]
+
+    return [
+      {
+        id: 'box-now',
+        label: 'Box now',
+        prediction: boxNow,
+        deltaVsBoxNowSec: 0,
+        rationale: boxNow.rationale,
+        isHypothetical: false
+      },
+      {
+        id: 'box-plus-n',
+        label: `Box in ${offsetLaps} laps`,
+        prediction: null,
+        deltaVsBoxNowSec: extraLossSec,
+        rationale:
+          extraLossSec != null
+            ? [
+                `Staying out ${offsetLaps} more laps costs ~${extraLossSec.toFixed(1)}s of pace at the current degradation rate.`,
+                'Gap and traffic figures are frozen at the current snapshot, not re-simulated forward.'
+              ]
+            : ['Not enough clean-lap data to project a degradation cost for this offset.'],
+        isHypothetical: true
+      },
+      {
+        id: 'box-neutralized',
+        label: 'Box under neutralization',
+        prediction: boxNeutralized,
+        deltaVsBoxNowSec: boxNeutralized.pitLossSec - boxNow.pitLossSec,
+        rationale: alreadyNeutralized
+          ? boxNeutralized.rationale
+          : [
+              `Hypothetical — track is currently green. Under Safety Car/VSC the pit loss would drop to ~${boxNeutralized.pitLossSec.toFixed(0)}s from ~${boxNow.pitLossSec.toFixed(0)}s.`
+            ],
+        isHypothetical: !alreadyNeutralized
+      },
+      {
+        id: 'stay-out',
+        label: 'Stay out',
+        prediction: null,
+        deltaVsBoxNowSec: null,
+        rationale: stayOutRationale,
+        isHypothetical: false
+      }
+    ]
   },
 
   /** Generate the most relevant insights for the current snapshot. */
