@@ -15,7 +15,11 @@ import {
 } from '@renderer/core/engines/geometry'
 import { placeTrackMapLabels } from './trackMap/labelLayout'
 import { TrackMapDriverMarker } from './trackMap/TrackMapDriverMarker'
-import { reconcileLivePositions, type PositionTrack } from './trackMap/positionTracking'
+import {
+  reconcileLivePositions,
+  fillMissingFromTracks,
+  type PositionTrack
+} from './trackMap/positionTracking'
 import type { DriverDot } from './trackMap/types'
 
 const CX = 150
@@ -89,6 +93,15 @@ export function TrackMap() {
     if (!snapshot) return { bounds: null, path: '', dots: [] }
 
     const meta = new Map(snapshot.drivers.map((d) => [d.number, d]))
+    const retiredDrivers = new Set(
+      snapshot.timing
+        .filter((t) => t.retired || t.status === 'RETIRED' || t.status === 'DNF')
+        .map((t) => t.driverNumber)
+    )
+    const inPitDrivers = new Set(
+      snapshot.timing.filter((t) => t.inPit || t.status === 'IN_PIT').map((t) => t.driverNumber)
+    )
+    const fastestDriver = snapshot.timing.find((entry) => entry.isFastestLap)?.driverNumber ?? null
     const driverDots: DriverDot[] = []
     let path = ''
 
@@ -115,16 +128,6 @@ export function TrackMap() {
             .map((point) => `${point.x},${point.y}`)
             .join(' ')
         }
-        const retiredDrivers = new Set(
-          snapshot.timing
-            .filter((t) => t.retired || t.status === 'RETIRED' || t.status === 'DNF')
-            .map((t) => t.driverNumber)
-        )
-        const inPitDrivers = new Set(
-          snapshot.timing.filter((t) => t.inPit || t.status === 'IN_PIT').map((t) => t.driverNumber)
-        )
-        const fastestDriver =
-          snapshot.timing.find((entry) => entry.isFastestLap)?.driverNumber ?? null
 
         for (const p of snapshot.positions) {
           if (p.x == null || p.y == null) continue
@@ -164,17 +167,45 @@ export function TrackMap() {
     // Dead-reckoning only means anything for a genuinely live, coordinate-mode
     // map — replay has no "now" to extrapolate towards, and schematic mode has
     // no x/y velocity to project.
-    const finalDots =
-      isLiveSnapshot && hasCoordinatePositions
-        ? reconcileLivePositions(
-            driverDots,
-            positionTrackRef.current,
-            Date.now(),
-            snapshot.feedFreshness?.Position ?? 0,
-            POSITION_STALE_MS,
-            MAX_EXTRAPOLATION_DISTANCE
-          )
-        : driverDots
+    let finalDots = driverDots
+    if (isLiveSnapshot && hasCoordinatePositions) {
+      const nowMs = Date.now()
+      const reconciled = reconcileLivePositions(
+        driverDots,
+        positionTrackRef.current,
+        nowMs,
+        snapshot.feedFreshness?.Position ?? 0,
+        POSITION_STALE_MS,
+        MAX_EXTRAPOLATION_DISTANCE
+      )
+      // A driver entirely missing from THIS frame's real positions — not just
+      // frozen, but absent — would otherwise vanish from the map for exactly
+      // one tick and reappear the next. Bridge it from their rolling track the
+      // same way a frozen-but-present reading is bridged.
+      finalDots = fillMissingFromTracks(
+        reconciled,
+        positionTrackRef.current,
+        (driverNumber, point) => {
+          if (retiredDrivers.has(driverNumber)) return null
+          const d = meta.get(driverNumber)
+          const timingEntry = snapshot.timing.find((t) => t.driverNumber === driverNumber)
+          if (!d || !timingEntry) return null
+          return {
+            number: driverNumber,
+            code: d.code,
+            color: hexColor(d.teamColour ?? null),
+            position: timingEntry.position,
+            isRetired: false,
+            isInPit: inPitDrivers.has(driverNumber),
+            isFastestLap: fastestDriver === driverNumber,
+            ...point
+          }
+        },
+        nowMs,
+        MAX_EXTRAPOLATION_DISTANCE,
+        POSITION_STALE_MS
+      )
+    }
 
     return {
       bounds: frameRef.current.bounds,
@@ -267,15 +298,31 @@ export function TrackMap() {
       <div className="flex h-full w-full items-center justify-center p-2">
         <svg viewBox="0 0 300 200" className="h-full w-full">
           {hasCoordinatePositions && geometry.path ? (
-            <polyline
-              points={geometry.path}
-              fill="none"
-              stroke={trackTint}
-              strokeWidth={3}
-              strokeOpacity={0.25}
-              strokeLinejoin="round"
-              strokeLinecap="round"
-            />
+            <>
+              {/* Soft halo carrying track-status colour (grey/amber/red), then a
+                  crisp bright core so the shape reads clearly against a dark
+                  panel with 20 colourful driver dots drawn on top of it — the
+                  single thin 25%-opacity line this used to be was functionally
+                  invisible at that contrast. */}
+              <polyline
+                points={geometry.path}
+                fill="none"
+                stroke={trackTint}
+                strokeWidth={8}
+                strokeOpacity={0.45}
+                strokeLinejoin="round"
+                strokeLinecap="round"
+              />
+              <polyline
+                points={geometry.path}
+                fill="none"
+                stroke="rgb(var(--fg))"
+                strokeWidth={2}
+                strokeOpacity={0.9}
+                strokeLinejoin="round"
+                strokeLinecap="round"
+              />
+            </>
           ) : hasCoordinatePositions ? null : (
             <>
               {/* Circuit outline */}

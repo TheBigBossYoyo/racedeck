@@ -98,6 +98,15 @@ const ENRICHMENT_NOTIFY_MIN_MS = 300 // bound snapshot fan-out while chunks stre
 const TRACK_PATH_CACHE_MAX = 700
 
 /**
+ * Minimum downsampled points before an UNCLOSED trace is shown as a
+ * best-effort map outline. Real inter-sample spacing is large enough (≈45m
+ * at racing speed against the ~150-unit thinning distance) that 30 points
+ * already represents a genuinely track-shaped arc, not just the first couple
+ * of live polls' worth of noise.
+ */
+const MIN_OPEN_TRACE_POINTS = 30
+
+/**
  * Bump when the shape of a cached track-path entry changes, OR when the
  * closure algorithm that PRODUCES it changes — a path cached by an older,
  * buggier closer is a stale-shaped entry too, even though it still parses.
@@ -471,9 +480,20 @@ export class F1LiveProvider implements DataProvider {
    * 20 points) written to the weekend's outline cache, corrupting it for every
    * later session at the same track. It also overwrote the good cached outline
    * loaded moments earlier, so seeding the map from an earlier session never
-   * actually worked. `allowOpenFallback` exists only for a fully downloaded
-   * archive feed, where a partial trace is all that will ever exist — and even
-   * then it is shown but never cached.
+   * actually worked.
+   *
+   * `allowOpenFallback` now applies to LIVE too, not just a fully downloaded
+   * archive: a strict "closed loop or nothing" map is only as good as the
+   * closure math, and if that math ever fails to close on some circuit/session
+   * shape it never previously exercised, the map has no way to recover —
+   * exactly the failure mode this exists to end. The corruption risk above is
+   * structurally avoided regardless: `saveTrackPathCache` is only ever called
+   * from the CLOSED branch, so an open trace is shown but never cached, live or
+   * not. `MIN_OPEN_TRACE_POINTS` still guards against publishing the "whatever
+   * partial squiggle" from the first couple of polls — only a trace substantial
+   * enough to actually look like part of a circuit gets shown; closure is still
+   * attempted first on every poll and silently upgrades the map the moment it
+   * succeeds.
    */
   private adoptTrackPath(allowOpenFallback: boolean): boolean {
     if (this.trackPathClosed) return false
@@ -486,7 +506,7 @@ export class F1LiveProvider implements DataProvider {
     }
     if (!allowOpenFallback || this.trackPath.length > 0) return false
     const open = buildTrackPath(this.positionPoints)
-    if (open.length === 0) return false
+    if (open.length < MIN_OPEN_TRACE_POINTS) return false
     this.trackPath = open
     return true
   }
@@ -849,14 +869,12 @@ export class F1LiveProvider implements DataProvider {
     await yieldToRenderer()
     if (expectedLoadVersion !== this.sessionLoadVersion)
       throw new Error('F1 session load was superseded.')
-    // Only ever upgrade the outline to a proven closed lap, except for a fully
-    // downloaded archive payload where the documented open-trace fallback is the
-    // best trace that will ever exist. Live sessions save closed laps too, so
-    // FP1's trace seeds FP2 and the race at the same circuit.
-    const allowOpenPositionFallback =
-      data.summary.path !== 'live' && data.summary.archiveStatus === 'Complete'
-    this.adoptTrackPath(allowOpenPositionFallback)
-    this.publishPositionsIfReady(allowOpenPositionFallback)
+    // Closure is still tried first and wins the moment it succeeds, live or
+    // not (`adoptTrackPath`) — the open trace is only ever a placeholder for
+    // whichever poll shows up before that happens, never cached, and only
+    // adopted once it clears `MIN_OPEN_TRACE_POINTS`.
+    this.adoptTrackPath(true)
+    this.publishPositionsIfReady(true)
     await yieldToRenderer()
     if (expectedLoadVersion !== this.sessionLoadVersion)
       throw new Error('F1 session load was superseded.')

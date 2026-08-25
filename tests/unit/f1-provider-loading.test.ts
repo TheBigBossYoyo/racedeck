@@ -612,7 +612,10 @@ describe('F1 provider session boundaries', () => {
     expect(secondLaps.find((lap) => lap.lapNumber === 5)?.isPitOutLap).toBe(true)
   })
 
-  it('keeps partial live Position coordinates hidden until an outline publication gate opens', async () => {
+  it('publishes real live Position coordinates immediately, even before any outline exists', async () => {
+    // A strict "closed loop or nothing" map has no way to recover if closure
+    // never succeeds for some circuit/session shape — real position data is
+    // shown as soon as it exists rather than withheld behind an outline gate.
     ipc.getLive.mockResolvedValueOnce({
       ...archive,
       summary: {
@@ -637,9 +640,42 @@ describe('F1 provider session boundaries', () => {
     await provider.loadSession('live')
 
     const snapshot = provider.getSnapshotAt(1)
+    // A single sample is nowhere near MIN_OPEN_TRACE_POINTS, so no outline
+    // (open or closed) exists yet — but the driver's real position is not
+    // hidden while that's true.
     expect(snapshot.trackPath).toEqual([])
-    expect(snapshot.positions[0]).toMatchObject({ driverNumber: 1, x: null, y: null, z: null })
-    expect(snapshot.availability.positions).toBe(false)
+    expect(snapshot.positions[0]).toMatchObject({ driverNumber: 1, x: 120, y: 340, z: 12 })
+    expect(snapshot.availability.positions).toBe(true)
+  })
+
+  it('adopts an unclosed live trace as a best-effort outline once it is substantial', async () => {
+    const substantial = Array.from({ length: 40 }, (_, i) => positionPoint(i, i * 200, i * 10))
+    ipc.getLive.mockResolvedValueOnce({
+      ...archive,
+      summary: {
+        ...archive.summary,
+        path: 'live',
+        feedPath: archive.summary.path,
+        liveStreamActive: true,
+        archiveStatus: 'Generating'
+      },
+      streams: {
+        ...archive.streams,
+        DriverList: [driverListPoint()],
+        TimingData: [{ t: 1, d: { Lines: { '1': { Position: '1' } } } }],
+        Position: substantial
+      },
+      duration: 40,
+      cursors: { TimingData: 1, Position: substantial.length },
+      generation: 1
+    })
+    const provider = new F1LiveProvider()
+
+    await provider.loadSession('live')
+
+    const snapshot = provider.getSnapshotAt(40)
+    expect(snapshot.trackPath.length).toBeGreaterThan(0)
+    expect(snapshot.availability.positions).toBe(true)
   })
 
   it('keeps the complete-archive open fallback for inline Position data', async () => {

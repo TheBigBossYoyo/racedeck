@@ -51,19 +51,43 @@ describe('TransportBar scrubber bookmarks', () => {
     expect(markerButtons.length).toBe(2) // only safety-car + lead-change survive
   })
 
-  it('still renders the rarer race-state bookmark kinds', () => {
+  it('renders the rarer race-state bookmark kinds up to the 5-marker cap', () => {
     const bookmarks = [
       bookmark('safety-car', 500),
       bookmark('vsc', 600),
       bookmark('red-flag', 700),
       bookmark('lead-change', 800),
-      bookmark('penalty', 900),
-      bookmark('fastest-lap', 1000)
+      bookmark('penalty', 900)
     ]
     useSessionStore.setState({ timeline: TIMELINE, bookmarks, duration: 3_600, clock: 0 })
 
     const { container } = render(createElement(TransportBar))
     const markerButtons = container.querySelectorAll('button[title$="click to jump"]')
-    expect(markerButtons.length).toBe(bookmarks.length)
+    expect(markerButtons.length).toBe(5)
+  })
+
+  it('caps at 5 total and keeps the highest-priority kinds when over the limit', () => {
+    const bookmarks = [
+      bookmark('fastest-lap', 100),
+      ...Array.from({ length: 6 }, (_, i) => bookmark('lead-change', 200 + i * 100)),
+      bookmark('penalty', 900),
+      bookmark('vsc', 950),
+      bookmark('safety-car', 1000),
+      bookmark('red-flag', 1050)
+    ]
+    useSessionStore.setState({ timeline: TIMELINE, bookmarks, duration: 3_600, clock: 0 })
+
+    const { container } = render(createElement(TransportBar))
+    const markerButtons = container.querySelectorAll('button[title$="click to jump"]')
+    expect(markerButtons.length).toBe(5)
+
+    const titles = Array.from(markerButtons).map((el) => el.getAttribute('title'))
+    // red-flag, safety-car, vsc, penalty always outrank lead-change/fastest-lap.
+    expect(titles.some((t) => t?.includes('red-flag'))).toBe(true)
+    expect(titles.some((t) => t?.includes('safety-car'))).toBe(true)
+    expect(titles.some((t) => t?.includes('vsc'))).toBe(true)
+    expect(titles.some((t) => t?.includes('penalty'))).toBe(true)
+    expect(titles.filter((t) => t?.includes('lead-change')).length).toBe(1)
+    expect(titles.some((t) => t?.includes('fastest-lap'))).toBe(false)
   })
 })

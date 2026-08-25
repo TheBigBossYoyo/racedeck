@@ -89,3 +89,35 @@ export function reconcileLivePositions(
     return dot
   })
 }
+
+/**
+ * Add a synthesized, dead-reckoned dot for every driver with a rolling track
+ * (has been seen before) who is entirely ABSENT from this frame's real dots
+ * — a single null/missing sample would otherwise drop that driver's marker
+ * for exactly one tick and bring it back the next, reading as a flicker
+ * across the field. `reconcileLivePositions` only smooths a driver who IS
+ * present but frozen; this covers the driver who isn't present at all.
+ * Bounded the same way: capped extrapolation distance, and skipped once the
+ * driver's own track is older than `maxOutageMs` — gone that long is treated
+ * as genuinely gone, not glitching, and `buildDot` returning null (e.g. a
+ * driver who has since retired) drops them too.
+ */
+export function fillMissingFromTracks(
+  dots: readonly DriverDot[],
+  tracked: ReadonlyMap<number, PositionTrack>,
+  buildDot: (driverNumber: number, point: Point) => DriverDot | null,
+  nowMs: number,
+  maxDistance: number,
+  maxOutageMs: number
+): DriverDot[] {
+  const present = new Set(dots.map((d) => d.number))
+  const filled: DriverDot[] = []
+  for (const [driverNumber, track] of tracked) {
+    if (present.has(driverNumber)) continue
+    if (nowMs - track.updatedAtMs > maxOutageMs) continue
+    const projected = extrapolatePosition(track, nowMs, maxDistance)
+    const dot = buildDot(driverNumber, projected)
+    if (dot) filled.push({ ...dot, extrapolated: true })
+  }
+  return filled.length > 0 ? [...dots, ...filled] : [...dots]
+}

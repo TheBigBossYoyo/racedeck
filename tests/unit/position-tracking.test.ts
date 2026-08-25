@@ -3,6 +3,7 @@ import {
   updatePositionTrack,
   extrapolatePosition,
   reconcileLivePositions,
+  fillMissingFromTracks,
   type PositionTrack
 } from '@renderer/widgets/trackMap/positionTracking'
 import type { DriverDot } from '@renderer/widgets/trackMap/types'
@@ -116,5 +117,52 @@ describe('reconcileLivePositions', () => {
 
     expect(result[0].extrapolated).toBeUndefined()
     expect(result[0].x).toBe(105)
+  })
+})
+
+describe('fillMissingFromTracks', () => {
+  const buildDot = (driverNumber: number, point: { x: number; y: number }): DriverDot =>
+    dot({ number: driverNumber, ...point })
+
+  it('synthesizes a dot for a driver absent this frame but tracked before', () => {
+    const tracked = new Map<number, PositionTrack>()
+    tracked.set(1, { x: 100, y: 100, vx: 0, vy: 0, updatedAtMs: 1_000 })
+    const dots: DriverDot[] = [] // driver 1 missing this exact tick
+
+    const result = fillMissingFromTracks(dots, tracked, buildDot, 1_050, 50, 5_000)
+
+    expect(result).toHaveLength(1)
+    expect(result[0]).toMatchObject({ number: 1, x: 100, y: 100, extrapolated: true })
+  })
+
+  it('does not duplicate a driver already present this frame', () => {
+    const tracked = new Map<number, PositionTrack>()
+    tracked.set(1, { x: 100, y: 100, vx: 0, vy: 0, updatedAtMs: 1_000 })
+    const dots = [dot({ number: 1, x: 105, y: 100 })]
+
+    const result = fillMissingFromTracks(dots, tracked, buildDot, 1_050, 50, 5_000)
+
+    expect(result).toHaveLength(1)
+    expect(result[0].x).toBe(105) // the real reading, untouched
+  })
+
+  it('drops a driver whose track is older than maxOutageMs — genuinely gone, not glitching', () => {
+    const tracked = new Map<number, PositionTrack>()
+    tracked.set(1, { x: 100, y: 100, vx: 0, vy: 0, updatedAtMs: 1_000 })
+    const dots: DriverDot[] = []
+
+    const result = fillMissingFromTracks(dots, tracked, buildDot, 10_000, 50, 5_000)
+
+    expect(result).toHaveLength(0)
+  })
+
+  it('drops a driver when buildDot returns null (e.g. retired since last seen)', () => {
+    const tracked = new Map<number, PositionTrack>()
+    tracked.set(1, { x: 100, y: 100, vx: 0, vy: 0, updatedAtMs: 1_000 })
+    const dots: DriverDot[] = []
+
+    const result = fillMissingFromTracks(dots, tracked, () => null, 1_050, 50, 5_000)
+
+    expect(result).toHaveLength(0)
   })
 })
