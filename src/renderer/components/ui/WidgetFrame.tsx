@@ -47,9 +47,7 @@ export function WidgetFrame({
             {title}
           </span>
         </div>
-        {subtitle && (
-          <span className="truncate text-2xs text-fg-subtle">{subtitle}</span>
-        )}
+        {subtitle && <span className="truncate text-2xs text-fg-subtle">{subtitle}</span>}
         <div className="no-drag ml-auto flex items-center gap-1">{actions}</div>
       </header>
       <div

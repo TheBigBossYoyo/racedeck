@@ -1,6 +1,8 @@
 import { clsx, type ClassValue } from 'clsx'
 import { twMerge } from 'tailwind-merge'
 
+export { formatClock } from './units'
+
 /** Tailwind-aware className combiner (shadcn convention). */
 export function cn(...inputs: ClassValue[]): string {
   return twMerge(clsx(inputs))
@@ -50,14 +52,6 @@ export function formatDelta(seconds: number | null | undefined, digits = 3): str
   if (seconds == null || !isFinite(seconds)) return '—'
   const sign = seconds > 0 ? '+' : seconds < 0 ? '' : '±'
   return `${sign}${seconds.toFixed(digits)}`
-}
-
-/** ISO timestamp → "14:05:33" (24h, local). */
-export function formatClock(iso: string | null | undefined): string {
-  if (!iso) return '—'
-  const d = new Date(iso)
-  if (isNaN(d.getTime())) return '—'
-  return d.toLocaleTimeString('en-GB', { hour12: false })
 }
 
 /** seconds → "42.5s" for the sync badge. */

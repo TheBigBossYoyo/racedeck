@@ -19,7 +19,9 @@ import {
   SlidersHorizontal,
   Trophy,
   Search,
-  ShieldCheck
+  ShieldCheck,
+  Ruler,
+  UserCog
 } from 'lucide-react'
 import type { MarketEventSummary } from '@shared/market'
 import { Button, Segmented, Badge } from '@renderer/components/ui/primitives'
@@ -29,10 +31,22 @@ import { useSettingsStore, isModuleEnabled } from '@renderer/store/settingsStore
 import { useVideoStore } from '@renderer/store/videoStore'
 import { useSessionStore } from '@renderer/store/sessionStore'
 import { useLayoutStore } from '@renderer/store/layoutStore'
+import { useProfileStore } from '@renderer/store/profileStore'
+import type { SessionType } from '@shared/models'
 import { ACCENT_PRESETS } from '@shared/constants'
 import { describeMode } from '@shared/video-fallback'
-import { AI_PROVIDERS, AI_PROVIDER_ORDER, isAiConfigReady, maskKey, type AiProviderId } from '@shared/ai'
-import { LAYOUT_PRESETS, WIDGET_CATALOG, type WidgetMeta } from '@renderer/core/engines/LayoutManager'
+import {
+  AI_PROVIDERS,
+  AI_PROVIDER_ORDER,
+  isAiConfigReady,
+  maskKey,
+  type AiProviderId
+} from '@shared/ai'
+import {
+  LAYOUT_PRESETS,
+  WIDGET_CATALOG,
+  type WidgetMeta
+} from '@renderer/core/engines/LayoutManager'
 import type { AlertConfig } from '@renderer/core/engines/AlertEngine'
 import { hasBridge, bridge } from '@renderer/lib/ipc'
 import { cn, hexColor } from '@renderer/lib/utils'
@@ -100,8 +114,24 @@ const ALERT_RULES: { key: keyof AlertConfig; label: string }[] = [
 ]
 
 export function SettingsPage() {
-  const { theme, setTheme, alerts, setAlerts, tod, setTod, performanceMode, setPerformanceMode, favorites, toggleFavorite, voice, setVoice, exportAll, importAll } =
-    useSettingsStore()
+  const {
+    theme,
+    setTheme,
+    alerts,
+    setAlerts,
+    tod,
+    setTod,
+    performanceMode,
+    setPerformanceMode,
+    favorites,
+    toggleFavorite,
+    voice,
+    setVoice,
+    units,
+    setUnits,
+    exportAll,
+    importAll
+  } = useSettingsStore()
   const video = useVideoStore((s) => s.state)
   const drivers = useSessionStore((s) => s.snapshot?.drivers ?? [])
   const catalog = useSessionStore((s) => s.catalog)
@@ -114,15 +144,31 @@ export function SettingsPage() {
       <div className="mx-auto max-w-4xl space-y-4 p-6">
         <div>
           <h1 className="text-xl font-bold text-fg">Settings</h1>
-          <p className="text-sm text-fg-muted">Tune RaceDeck to your setup, broadcaster and taste.</p>
+          <p className="text-sm text-fg-muted">
+            Tune RaceDeck to your setup, broadcaster and taste.
+          </p>
         </div>
 
         {/* TOD integration */}
-        <Section icon={<Tv className="h-4 w-4" />} title="TOD integration" desc="How the TOD broadcast surface is presented.">
+        <Section
+          icon={<Tv className="h-4 w-4" />}
+          title="TOD integration"
+          desc="How the TOD broadcast surface is presented."
+        >
           <div className="mb-3 rounded-xl border border-hairline/25 bg-white/[0.02] p-3">
             <div className="flex items-center gap-2">
-              <span className="text-xs font-semibold text-fg">{describeMode(video.mode).label}</span>
-              <Badge tone={video.mode === 'embedded' ? 'good' : video.mode === 'companion' ? 'accent' : 'warn'}>
+              <span className="text-xs font-semibold text-fg">
+                {describeMode(video.mode).label}
+              </span>
+              <Badge
+                tone={
+                  video.mode === 'embedded'
+                    ? 'good'
+                    : video.mode === 'companion'
+                      ? 'accent'
+                      : 'warn'
+                }
+              >
                 {describeMode(video.mode).short}
               </Badge>
             </div>
@@ -133,12 +179,21 @@ export function SettingsPage() {
               </p>
             )}
             <div className="mt-2 grid grid-cols-3 gap-2 text-2xs">
-              <Stat k="Widevine DRM" v={video.drmReady ? 'Ready' : 'Unavailable'} good={video.drmReady} />
+              <Stat
+                k="Widevine DRM"
+                v={video.drmReady ? 'Ready' : 'Unavailable'}
+                good={video.drmReady}
+              />
               <Stat k="Embedded OK" v={video.embeddedSupported} />
               <Stat k="Playback" v={video.playbackActive} />
             </div>
           </div>
-          <Toggle label="Auto-fallback to companion window" hint="If embedding is blocked, open a docked companion window automatically." checked={tod.autoFallback} onChange={(v) => setTod({ autoFallback: v })} />
+          <Toggle
+            label="Auto-fallback to companion window"
+            hint="If embedding is blocked, open a docked companion window automatically."
+            checked={tod.autoFallback}
+            onChange={(v) => setTod({ autoFallback: v })}
+          />
           <div className="mt-2">
             <label className="text-2xs uppercase tracking-wide text-fg-subtle">TOD URL</label>
             <input
@@ -159,7 +214,11 @@ export function SettingsPage() {
         <ModulesSection />
 
         {/* Appearance */}
-        <Section icon={<Palette className="h-4 w-4" />} title="Appearance" desc="Theme, density and motion.">
+        <Section
+          icon={<Palette className="h-4 w-4" />}
+          title="Appearance"
+          desc="Theme, density and motion."
+        >
           <div className="mb-3 flex items-center justify-between">
             <span className="text-xs font-medium text-fg">Color scheme</span>
             <Segmented
@@ -200,12 +259,23 @@ export function SettingsPage() {
               onChange={(v) => setTheme({ density: v })}
             />
           </div>
-          <Toggle label="Team-color highlights" checked={theme.teamColorMode} onChange={(v) => setTheme({ teamColorMode: v })} />
-          <Toggle label="Reduce motion" hint="Disable heavy animations." checked={theme.reducedMotion} onChange={(v) => setTheme({ reducedMotion: v })} />
+          <Toggle
+            label="Team-color highlights"
+            checked={theme.teamColorMode}
+            onChange={(v) => setTheme({ teamColorMode: v })}
+          />
+          <Toggle
+            label="Reduce motion"
+            hint="Disable heavy animations."
+            checked={theme.reducedMotion}
+            onChange={(v) => setTheme({ reducedMotion: v })}
+          />
           <div className="flex items-center justify-between py-1.5">
             <div className="min-w-0 pr-2">
               <span className="text-xs font-medium text-fg">Colour vision</span>
-              <p className="text-2xs text-fg-subtle">Colour-blind-safe tyre palettes. Compound letters always shown.</p>
+              <p className="text-2xs text-fg-subtle">
+                Colour-blind-safe tyre palettes. Compound letters always shown.
+              </p>
             </div>
             <Segmented
               value={theme.colorVision}
@@ -227,14 +297,73 @@ export function SettingsPage() {
           <div className="py-1.5">
             <div className="mb-1 flex items-center justify-between">
               <span className="text-xs font-medium text-fg">Font scale</span>
-              <span className="tnum text-2xs text-fg-muted">{Math.round(theme.fontScale * 100)}%</span>
+              <span className="tnum text-2xs text-fg-muted">
+                {Math.round(theme.fontScale * 100)}%
+              </span>
             </div>
-            <Slider min={0.85} max={1.3} step={0.05} value={[theme.fontScale]} onValueChange={([v]) => setTheme({ fontScale: v })} />
+            <Slider
+              min={0.85}
+              max={1.3}
+              step={0.05}
+              value={[theme.fontScale]}
+              onValueChange={([v]) => setTheme({ fontScale: v })}
+            />
+          </div>
+        </Section>
+
+        {/* Units */}
+        <Section
+          icon={<Ruler className="h-4 w-4" />}
+          title="Units"
+          desc="Temperature, speed, and clock display preferences."
+        >
+          <div className="flex items-center justify-between py-1.5">
+            <span className="text-xs font-medium text-fg">Temperature</span>
+            <Segmented
+              value={units.temperature}
+              options={[
+                { value: 'c', label: '°C' },
+                { value: 'f', label: '°F' }
+              ]}
+              onChange={(v) => setUnits({ temperature: v })}
+            />
+          </div>
+          <div className="flex items-center justify-between py-1.5">
+            <span className="text-xs font-medium text-fg">Speed</span>
+            <Segmented
+              value={units.speed}
+              options={[
+                { value: 'kmh', label: 'km/h' },
+                { value: 'mph', label: 'mph' }
+              ]}
+              onChange={(v) => setUnits({ speed: v })}
+            />
+          </div>
+          <div className="flex items-center justify-between py-1.5">
+            <div className="min-w-0 pr-2">
+              <span className="text-xs font-medium text-fg">Clock</span>
+              <p className="text-2xs text-fg-subtle">
+                Race-control timestamps. No per-circuit timezone data — UTC is the feed's native
+                time.
+              </p>
+            </div>
+            <Segmented
+              value={units.clock}
+              options={[
+                { value: 'local', label: 'Local' },
+                { value: 'utc', label: 'UTC' }
+              ]}
+              onChange={(v) => setUnits({ clock: v })}
+            />
           </div>
         </Section>
 
         {/* Alerts */}
-        <Section icon={<Bell className="h-4 w-4" />} title="Alerts" desc="Choose which events trigger alerts.">
+        <Section
+          icon={<Bell className="h-4 w-4" />}
+          title="Alerts"
+          desc="Choose which events trigger alerts."
+        >
           <div className="grid grid-cols-1 gap-x-6 sm:grid-cols-2">
             {ALERT_RULES.map((r) => (
               <Toggle
@@ -248,14 +377,29 @@ export function SettingsPage() {
           <div className="mt-2 py-1.5">
             <div className="mb-1 flex items-center justify-between">
               <span className="text-xs font-medium text-fg">Interval change threshold</span>
-              <span className="tnum text-2xs text-fg-muted">{alerts.intervalThresholdSec.toFixed(1)}s</span>
+              <span className="tnum text-2xs text-fg-muted">
+                {alerts.intervalThresholdSec.toFixed(1)}s
+              </span>
             </div>
-            <Slider min={0.5} max={10} step={0.5} value={[alerts.intervalThresholdSec]} onValueChange={([v]) => setAlerts({ intervalThresholdSec: v })} />
+            <Slider
+              min={0.5}
+              max={10}
+              step={0.5}
+              value={[alerts.intervalThresholdSec]}
+              onValueChange={([v]) => setAlerts({ intervalThresholdSec: v })}
+            />
           </div>
         </Section>
 
+        {/* Race-watch profiles */}
+        <ProfilesSection />
+
         {/* Favourites */}
-        <Section icon={<Star className="h-4 w-4" />} title="Favourite drivers" desc="Focus alerts and strategy on these drivers.">
+        <Section
+          icon={<Star className="h-4 w-4" />}
+          title="Favourite drivers"
+          desc="Focus alerts and strategy on these drivers."
+        >
           {drivers.length === 0 ? (
             <p className="text-xs text-fg-subtle">Load a session to pick favourite drivers.</p>
           ) : (
@@ -271,9 +415,17 @@ export function SettingsPage() {
                       fav ? 'border-accent/40 bg-accent/10' : 'border-hairline/25 hover:bg-white/5'
                     )}
                   >
-                    <span className="h-4 w-1 rounded-full" style={{ backgroundColor: hexColor(d.teamColour) }} />
+                    <span
+                      className="h-4 w-1 rounded-full"
+                      style={{ backgroundColor: hexColor(d.teamColour) }}
+                    />
                     <span className="text-xs font-bold text-fg">{d.code}</span>
-                    <Star className={cn('ml-auto h-3.5 w-3.5', fav ? 'fill-accent text-accent' : 'text-fg-subtle')} />
+                    <Star
+                      className={cn(
+                        'ml-auto h-3.5 w-3.5',
+                        fav ? 'fill-accent text-accent' : 'text-fg-subtle'
+                      )}
+                    />
                   </button>
                 )
               })}
@@ -282,7 +434,11 @@ export function SettingsPage() {
         </Section>
 
         {/* Data source */}
-        <Section icon={<Database className="h-4 w-4" />} title="Data source" desc="Where live/replay timing comes from.">
+        <Section
+          icon={<Database className="h-4 w-4" />}
+          title="Data source"
+          desc="Where live/replay timing comes from."
+        >
           <Segmented
             size="md"
             value={providerId}
@@ -304,13 +460,22 @@ export function SettingsPage() {
         </Section>
 
         {/* Layouts */}
-        <Section icon={<LayoutGrid className="h-4 w-4" />} title="Saved layouts" desc="Your custom panel arrangements.">
+        <Section
+          icon={<LayoutGrid className="h-4 w-4" />}
+          title="Saved layouts"
+          desc="Your custom panel arrangements."
+        >
           {savedLayouts.length === 0 ? (
-            <p className="text-xs text-fg-subtle">No saved layouts. Save one from the dashboard command bar.</p>
+            <p className="text-xs text-fg-subtle">
+              No saved layouts. Save one from the dashboard command bar.
+            </p>
           ) : (
             <div className="space-y-1.5">
               {savedLayouts.map((l) => (
-                <div key={l.id} className="flex items-center gap-2 rounded-lg border border-hairline/25 px-3 py-2">
+                <div
+                  key={l.id}
+                  className="flex items-center gap-2 rounded-lg border border-hairline/25 px-3 py-2"
+                >
                   <span className="text-xs font-medium text-fg">{l.name}</span>
                   <Badge tone="neutral">{LAYOUT_PRESETS[l.base].name}</Badge>
                   <div className="ml-auto flex gap-1">
@@ -330,7 +495,12 @@ export function SettingsPage() {
         {/* Performance + backup */}
         <div className="grid gap-4 md:grid-cols-2">
           <Section icon={<Cpu className="h-4 w-4" />} title="Performance">
-            <Toggle label="Performance mode" hint="Lower update rate & animations for low-power machines." checked={performanceMode} onChange={setPerformanceMode} />
+            <Toggle
+              label="Performance mode"
+              hint="Lower update rate & animations for low-power machines."
+              checked={performanceMode}
+              onChange={setPerformanceMode}
+            />
           </Section>
           <Section icon={<DownloadCloud className="h-4 w-4" />} title="Backup">
             <BackupControls exportAll={exportAll} importAll={importAll} />
@@ -378,7 +548,9 @@ const MODULE_DESC: Partial<Record<string, string>> = {
   championship: 'Title-fight projection & standings',
   'engineer-notes': 'Proactive strategy prompts + voice',
   alerts: 'Event alert center',
-  sync: 'Broadcast-delay wizard'
+  sync: 'Broadcast-delay wizard',
+  annotations: 'Timestamped notes, exportable with the debrief',
+  plugins: 'Run local scripts against a readonly snapshot'
 }
 
 function MarketSection() {
@@ -445,20 +617,38 @@ function MarketSection() {
             onKeyDown={(e) => e.key === 'Enter' && void runSearch()}
             className="min-w-0 flex-1 rounded-lg border border-hairline/40 bg-black/30 px-3 py-1.5 text-xs text-fg outline-none focus:border-accent/50"
           />
-          <Button variant="outline" size="md" onClick={() => void runSearch()} disabled={searching || !query.trim()}>
-            {searching ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Search className="h-3.5 w-3.5" />}
+          <Button
+            variant="outline"
+            size="md"
+            onClick={() => void runSearch()}
+            disabled={searching || !query.trim()}
+          >
+            {searching ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Search className="h-3.5 w-3.5" />
+            )}
             Search
           </Button>
         </div>
         {err && <p className="mt-1.5 text-2xs text-danger">{err}</p>}
         {results && (
           <div className="mt-1.5 space-y-1">
-            {results.length === 0 && <p className="text-2xs text-fg-subtle">No winner markets found.</p>}
+            {results.length === 0 && (
+              <p className="text-2xs text-fg-subtle">No winner markets found.</p>
+            )}
             {results.map((ev) => (
-              <div key={ev.slug} className="flex items-center gap-2 rounded-lg border border-hairline/25 px-2 py-1.5">
+              <div
+                key={ev.slug}
+                className="flex items-center gap-2 rounded-lg border border-hairline/25 px-2 py-1.5"
+              >
                 <StatusDotLite closed={ev.closed} />
                 <span className="min-w-0 flex-1 truncate text-2xs text-fg-muted">{ev.title}</span>
-                <Button size="xs" variant="subtle" onClick={() => setMarket({ slugOverride: ev.slug })}>
+                <Button
+                  size="xs"
+                  variant="subtle"
+                  onClick={() => setMarket({ slugOverride: ev.slug })}
+                >
                   {market.slugOverride === ev.slug ? 'Pinned' : 'Pin'}
                 </Button>
               </div>
@@ -485,6 +675,73 @@ function MarketSection() {
   )
 }
 
+const SESSION_TYPE_LABEL: Record<SessionType, string> = {
+  practice: 'Practice',
+  qualifying: 'Qualifying',
+  'sprint-qualifying': 'Sprint Qualifying',
+  sprint: 'Sprint',
+  race: 'Race',
+  testing: 'Testing',
+  unknown: 'Unknown'
+}
+
+function ProfilesSection() {
+  const currentSession = useSessionStore((s) => s.currentSession)
+  const { profiles, autoApply, saveCurrentAsProfile, applyProfile, removeProfile, setAutoApply } =
+    useProfileStore()
+
+  const currentType = currentSession?.type ?? null
+  const savedTypes = (Object.keys(profiles) as SessionType[]).filter((t) => profiles[t])
+
+  return (
+    <Section
+      icon={<UserCog className="h-4 w-4" />}
+      title="Race-watch profiles"
+      desc="Favourites, layout and alert tweaks saved per session type, applied automatically when that type loads. Critical alerts (red flag, safety car, penalties, qualifying elimination) are never affected."
+    >
+      <Toggle label="Auto-apply on session load" checked={autoApply} onChange={setAutoApply} />
+      <div className="mt-2 flex items-center gap-2">
+        <span className="text-xs text-fg-muted">
+          {currentSession
+            ? `Current session: ${SESSION_TYPE_LABEL[currentSession.type]}`
+            : 'Load a session to save a profile for its type.'}
+        </span>
+        {currentType && (
+          <Button
+            size="xs"
+            variant="outline"
+            className="ml-auto"
+            onClick={() => saveCurrentAsProfile(currentType)}
+          >
+            Save current setup
+          </Button>
+        )}
+      </div>
+      {savedTypes.length > 0 && (
+        <div className="mt-2 space-y-1.5">
+          {savedTypes.map((t) => (
+            <div
+              key={t}
+              className="flex items-center gap-2 rounded-lg border border-hairline/25 px-3 py-2"
+            >
+              <span className="text-xs font-medium text-fg">{SESSION_TYPE_LABEL[t]}</span>
+              <Badge tone="neutral">{profiles[t]?.favoriteDrivers.length ?? 0} favourites</Badge>
+              <div className="ml-auto flex gap-1">
+                <Button size="xs" variant="outline" onClick={() => applyProfile(t)}>
+                  Apply now
+                </Button>
+                <Button size="icon-sm" variant="ghost" onClick={() => removeProfile(t)}>
+                  <Trash2 className="h-3.5 w-3.5" />
+                </Button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </Section>
+  )
+}
+
 function StatusDotLite({ closed }: { closed: boolean }) {
   return (
     <span
@@ -502,7 +759,9 @@ function ModulesSection() {
   const enabledCount = (Object.values(WIDGET_CATALOG) as WidgetMeta[]).filter(
     (w) => w.key !== 'tod-video' && isModuleEnabled(modules, w.key)
   ).length
-  const total = (Object.values(WIDGET_CATALOG) as WidgetMeta[]).filter((w) => w.key !== 'tod-video').length
+  const total = (Object.values(WIDGET_CATALOG) as WidgetMeta[]).filter(
+    (w) => w.key !== 'tod-video'
+  ).length
 
   return (
     <Section
@@ -511,10 +770,16 @@ function ModulesSection() {
       desc="Enable or disable any panel. Disabled panels are hidden everywhere and removed from the Widgets menu."
     >
       <div className="mb-2 flex items-center gap-1.5">
-        <Badge tone="accent">{enabledCount}/{total} on</Badge>
+        <Badge tone="accent">
+          {enabledCount}/{total} on
+        </Badge>
         <div className="ml-auto flex gap-1.5">
-          <Button size="xs" variant="subtle" onClick={() => setAllModules(true)}>Enable all</Button>
-          <Button size="xs" variant="subtle" onClick={() => setAllModules(false)}>Disable all</Button>
+          <Button size="xs" variant="subtle" onClick={() => setAllModules(true)}>
+            Enable all
+          </Button>
+          <Button size="xs" variant="subtle" onClick={() => setAllModules(false)}>
+            Disable all
+          </Button>
         </div>
       </div>
       {MODULE_GROUPS.map(({ group, label }) => {
@@ -524,7 +789,9 @@ function ModulesSection() {
         if (items.length === 0) return null
         return (
           <div key={group} className="mb-2.5">
-            <div className="mb-1 text-2xs font-semibold uppercase tracking-wide text-fg-subtle">{label}</div>
+            <div className="mb-1 text-2xs font-semibold uppercase tracking-wide text-fg-subtle">
+              {label}
+            </div>
             <div className="grid grid-cols-1 gap-x-6 sm:grid-cols-2">
               {items.map((w) => (
                 <Toggle
@@ -565,7 +832,8 @@ function AiSection() {
   }
 
   const runTest = async () => {
-    if (!hasBridge()) return setTest({ state: 'error', msg: 'Test only runs inside the desktop app.' })
+    if (!hasBridge())
+      return setTest({ state: 'error', msg: 'Test only runs inside the desktop app.' })
     setTest({ state: 'testing' })
     const res = await bridge().ai.complete({
       config: { ...ai, enabled: true },
@@ -607,7 +875,9 @@ function AiSection() {
                 )}
               >
                 <span className="flex w-full items-center gap-1">
-                  <span className={cn('text-xs font-semibold', active ? 'text-fg' : 'text-fg-muted')}>
+                  <span
+                    className={cn('text-xs font-semibold', active ? 'text-fg' : 'text-fg-muted')}
+                  >
                     {m.label}
                   </span>
                   <Badge tone={m.free ? 'good' : 'neutral'} className="ml-auto">
@@ -628,7 +898,10 @@ function AiSection() {
       <div className="mt-2">
         <div className="flex items-center justify-between">
           <label className="text-2xs uppercase tracking-wide text-fg-subtle">
-            API key {meta.editableBaseUrl && <span className="normal-case text-fg-subtle">(optional for local)</span>}
+            API key{' '}
+            {meta.editableBaseUrl && (
+              <span className="normal-case text-fg-subtle">(optional for local)</span>
+            )}
           </label>
           {meta.keyUrl && (
             <button
@@ -645,7 +918,9 @@ function AiSection() {
             value={ai.apiKey}
             spellCheck={false}
             autoComplete="off"
-            placeholder={meta.editableBaseUrl ? 'leave blank for no-auth local endpoint' : 'paste your key'}
+            placeholder={
+              meta.editableBaseUrl ? 'leave blank for no-auth local endpoint' : 'paste your key'
+            }
             onChange={(e) => {
               setAi({ apiKey: e.target.value })
               setTest({ state: 'idle' })
@@ -653,7 +928,12 @@ function AiSection() {
             }}
             className="mono min-w-0 flex-1 rounded-lg border border-hairline/40 bg-black/30 px-3 py-1.5 text-xs text-fg outline-none focus:border-accent/50"
           />
-          <Button variant="ghost" size="icon" onClick={() => setShowKey((v) => !v)} title={showKey ? 'Hide' : 'Show'}>
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => setShowKey((v) => !v)}
+            title={showKey ? 'Hide' : 'Show'}
+          >
             {showKey ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
           </Button>
           <Button
@@ -670,7 +950,11 @@ function AiSection() {
               }
             }}
           >
-            {saveState === 'saving' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+            {saveState === 'saving' ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Check className="h-3.5 w-3.5" />
+            )}
             Save key
           </Button>
         </div>
@@ -728,8 +1012,17 @@ function AiSection() {
 
       {/* Test + status */}
       <div className="mt-3 flex items-center gap-2">
-        <Button variant="outline" size="md" disabled={test.state === 'testing' || !ready} onClick={runTest}>
-          {test.state === 'testing' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Zap className="h-3.5 w-3.5" />}
+        <Button
+          variant="outline"
+          size="md"
+          disabled={test.state === 'testing' || !ready}
+          onClick={runTest}
+        >
+          {test.state === 'testing' ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          ) : (
+            <Zap className="h-3.5 w-3.5" />
+          )}
           Test connection
         </Button>
         <Badge tone={ready ? 'good' : 'warn'}>{ready ? 'ready' : 'incomplete'}</Badge>
@@ -743,8 +1036,8 @@ function AiSection() {
 
       <p className="mt-3 rounded-md border border-hairline/20 bg-black/20 p-2 text-2xs leading-relaxed text-fg-subtle">
         Your key is stored locally on this device and sent only to the provider you choose, together
-        with the on-screen timing context. It is never shared with TOD, RaceDeck, or any third party,
-        and it is excluded from exported settings by default.
+        with the on-screen timing context. It is never shared with TOD, RaceDeck, or any third
+        party, and it is excluded from exported settings by default.
       </p>
     </Section>
   )
@@ -771,11 +1064,18 @@ function BackupControls({
   return (
     <Dialog>
       <DialogTrigger asChild>
-        <Button variant="outline" size="md" onClick={() => setText(JSON.stringify(exportAll(), null, 2))}>
+        <Button
+          variant="outline"
+          size="md"
+          onClick={() => setText(JSON.stringify(exportAll(), null, 2))}
+        >
           Export / import settings
         </Button>
       </DialogTrigger>
-      <DialogContent title="Backup settings" description="Copy this JSON to back up, or paste JSON and import.">
+      <DialogContent
+        title="Backup settings"
+        description="Copy this JSON to back up, or paste JSON and import."
+      >
         <div className="p-4">
           <textarea
             value={text}
@@ -783,7 +1083,11 @@ function BackupControls({
             spellCheck={false}
             className="h-48 w-full resize-none rounded-lg border border-hairline/40 bg-black/40 p-2 font-mono text-2xs text-fg outline-none focus:border-accent/50"
           />
-          {status && <p className="mt-2 flex items-center gap-1 text-2xs text-good"><Check className="h-3 w-3" /> {status}</p>}
+          {status && (
+            <p className="mt-2 flex items-center gap-1 text-2xs text-good">
+              <Check className="h-3 w-3" /> {status}
+            </p>
+          )}
           <div className="mt-3 flex justify-end gap-2">
             <Button
               variant="ghost"

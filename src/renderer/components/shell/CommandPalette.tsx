@@ -8,6 +8,7 @@ import { useOnboardingStore } from '@renderer/store/onboardingStore'
 import { pickDriver } from '@renderer/lib/useFocusDriver'
 import { hasBridge, bridge } from '@renderer/lib/ipc'
 import { buildDebrief, debriefToMarkdown } from '@renderer/core/engines/DebriefBuilder'
+import { useAnnotationsStore } from '@renderer/store/annotationsStore'
 import {
   LAYOUT_ORDER,
   LAYOUT_PRESETS,
@@ -204,7 +205,12 @@ export function CommandPalette() {
         run: wrap(() => {
           const full = session.getFullSnapshot()
           if (!full) return
-          const debrief = buildDebrief(full, session.bookmarks)
+          const debrief = buildDebrief(
+            full,
+            session.bookmarks,
+            undefined,
+            useAnnotationsStore.getState().annotations
+          )
           void bridge().app.exportDebrief(
             debriefToMarkdown(debrief),
             'md',
@@ -220,7 +226,12 @@ export function CommandPalette() {
         run: wrap(() => {
           const full = session.getFullSnapshot()
           if (!full) return
-          const debrief = buildDebrief(full, session.bookmarks)
+          const debrief = buildDebrief(
+            full,
+            session.bookmarks,
+            undefined,
+            useAnnotationsStore.getState().annotations
+          )
           void bridge().app.exportDebrief(
             JSON.stringify(debrief, null, 2),
             'json',

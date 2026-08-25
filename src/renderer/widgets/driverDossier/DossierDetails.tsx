@@ -2,6 +2,7 @@ import type { ReactNode } from 'react'
 import type { DriverSessionBests } from '@shared/models'
 import type { PaceRival } from '@renderer/core/engines/StrategyEngine'
 import { cn } from '@renderer/lib/utils'
+import { convertSpeed, speedUnitLabel, type SpeedUnit } from '@renderer/lib/units'
 
 export function DossierStat({
   label,
@@ -20,7 +21,13 @@ export function DossierStat({
   )
 }
 
-export function SpeedMarks({ speeds }: { readonly speeds: DriverSessionBests['speeds'] }) {
+export function SpeedMarks({
+  speeds,
+  speedUnit
+}: {
+  readonly speeds: DriverSessionBests['speeds']
+  readonly speedUnit: SpeedUnit
+}) {
   const marks = [
     ['I1', speeds.i1],
     ['I2', speeds.i2],
@@ -31,7 +38,7 @@ export function SpeedMarks({ speeds }: { readonly speeds: DriverSessionBests['sp
   return (
     <div>
       <div className="mb-1 text-[9px] uppercase tracking-wide text-fg-subtle">
-        Best speeds (km/h - field rank)
+        Best speeds ({speedUnitLabel(speedUnit)} - field rank)
       </div>
       <div className="grid grid-cols-4 gap-1.5">
         {marks.map(([label, mark]) => (
@@ -46,7 +53,7 @@ export function SpeedMarks({ speeds }: { readonly speeds: DriverSessionBests['sp
                 mark.rank === 1 ? 'text-purple' : 'text-fg'
               )}
             >
-              {mark.value ?? '-'}
+              {mark.value != null ? convertSpeed(mark.value, speedUnit).toFixed(0) : '-'}
             </div>
             {mark.rank != null && (
               <div className="text-[9px] tabular-nums text-fg-subtle">P{mark.rank}</div>
@@ -82,12 +89,16 @@ export function BattleLine({
     <div className="flex items-center gap-1.5 rounded-md border border-hairline/15 bg-white/[0.015] px-2 py-1 text-2xs">
       <span className="text-fg-subtle">{icon}</span>
       <span className="font-bold text-fg">{rival.code}</span>
-      <span className="tnum text-fg-muted">{rival.gapSec != null ? `${rival.gapSec.toFixed(1)}s` : '-'}</span>
+      <span className="tnum text-fg-muted">
+        {rival.gapSec != null ? `${rival.gapSec.toFixed(1)}s` : '-'}
+      </span>
       <span className={cn('ml-auto', tone)}>
         {rival.deltaPerLap == null
           ? '-'
           : `${rival.deltaPerLap > 0 ? '+' : ''}${rival.deltaPerLap.toFixed(2)}s/lap${
-              rival.closing && rival.lapsToResolve != null ? ` - ~${Math.ceil(rival.lapsToResolve)}L` : ''
+              rival.closing && rival.lapsToResolve != null
+                ? ` - ~${Math.ceil(rival.lapsToResolve)}L`
+                : ''
             }`}
       </span>
     </div>

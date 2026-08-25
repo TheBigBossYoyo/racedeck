@@ -6,6 +6,7 @@ import { persist } from './persist'
 import { ThemeEngine, DEFAULT_THEME, type ThemeConfig } from '@renderer/core/engines/ThemeEngine'
 import { DEFAULT_ALERT_CONFIG, type AlertConfig } from '@renderer/core/engines/AlertEngine'
 import { WIDGET_CATALOG, type WidgetKey } from '@renderer/core/engines/LayoutManager'
+import { defaultUnitsConfig, normalizeUnitsConfig, type UnitsConfig } from '@renderer/lib/units'
 import { nanoid } from 'nanoid'
 
 /** Per-module on/off flags. Absent key = enabled (the TOD video is always on). */
@@ -71,9 +72,10 @@ export function defaultVoiceConfig(): VoiceConfig {
 
 function normalizeVoiceConfig(value?: Partial<VoiceConfig> | null): VoiceConfig {
   const base = defaultVoiceConfig()
-  const rate = typeof value?.rate === 'number' && Number.isFinite(value.rate)
-    ? Math.min(2, Math.max(0.5, value.rate))
-    : base.rate
+  const rate =
+    typeof value?.rate === 'number' && Number.isFinite(value.rate)
+      ? Math.min(2, Math.max(0.5, value.rate))
+      : base.rate
   return { enabled: Boolean(value?.enabled), rate }
 }
 
@@ -88,6 +90,7 @@ interface SettingsState {
   modules: ModuleFlags
   performanceMode: boolean
   syncPresets: SyncPreset[]
+  units: UnitsConfig
   hydrated: boolean
 
   hydrate: () => Promise<void>
@@ -100,6 +103,7 @@ interface SettingsState {
   saveAi: () => Promise<void>
   setMarket: (patch: Partial<MarketConfig>) => void
   setVoice: (patch: Partial<VoiceConfig>) => void
+  setUnits: (patch: Partial<UnitsConfig>) => void
   setModule: (key: WidgetKey, on: boolean) => void
   setAllModules: (on: boolean) => void
   setPerformanceMode: (v: boolean) => void
@@ -119,7 +123,8 @@ const K = {
   voice: 'voice',
   modules: 'modules',
   performance: 'performanceMode',
-  syncPresets: 'syncPresets'
+  syncPresets: 'syncPresets',
+  units: 'units'
 }
 
 let aiPersistQueue: Promise<void> = Promise.resolve()
@@ -142,22 +147,35 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   modules: defaultModules(),
   performanceMode: false,
   syncPresets: [],
+  units: defaultUnitsConfig(),
   hydrated: false,
 
   hydrate: async () => {
-    const [theme, alerts, favorites, tod, ai, market, voice, modules, performanceMode, syncPresets] =
-      await Promise.all([
-        persist.get<ThemeConfig>(STORE_NS.SETTINGS, K.theme),
-        persist.get<AlertConfig>(STORE_NS.ALERTS, K.alerts),
-        persist.get<number[]>(STORE_NS.FAVORITES, K.favorites),
-        persist.get<TodPrefs>(STORE_NS.SETTINGS, K.tod),
-        persist.get<AiConfig>(STORE_NS.SETTINGS, K.ai),
-        persist.get<MarketConfig>(STORE_NS.SETTINGS, K.market),
-        persist.get<VoiceConfig>(STORE_NS.SETTINGS, K.voice),
-        persist.get<ModuleFlags>(STORE_NS.SETTINGS, K.modules),
-        persist.get<boolean>(STORE_NS.SETTINGS, K.performance),
-        persist.get<SyncPreset[]>(STORE_NS.SYNC, K.syncPresets)
-      ])
+    const [
+      theme,
+      alerts,
+      favorites,
+      tod,
+      ai,
+      market,
+      voice,
+      modules,
+      performanceMode,
+      syncPresets,
+      units
+    ] = await Promise.all([
+      persist.get<ThemeConfig>(STORE_NS.SETTINGS, K.theme),
+      persist.get<AlertConfig>(STORE_NS.ALERTS, K.alerts),
+      persist.get<number[]>(STORE_NS.FAVORITES, K.favorites),
+      persist.get<TodPrefs>(STORE_NS.SETTINGS, K.tod),
+      persist.get<AiConfig>(STORE_NS.SETTINGS, K.ai),
+      persist.get<MarketConfig>(STORE_NS.SETTINGS, K.market),
+      persist.get<VoiceConfig>(STORE_NS.SETTINGS, K.voice),
+      persist.get<ModuleFlags>(STORE_NS.SETTINGS, K.modules),
+      persist.get<boolean>(STORE_NS.SETTINGS, K.performance),
+      persist.get<SyncPreset[]>(STORE_NS.SYNC, K.syncPresets),
+      persist.get<UnitsConfig>(STORE_NS.SETTINGS, K.units)
+    ])
     const mergedTheme = { ...DEFAULT_THEME, ...(theme ?? {}) }
     const mergedFavorites = favorites ?? []
     set({
@@ -173,9 +191,13 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       modules: { ...defaultModules(), ...(modules ?? {}) },
       performanceMode: performanceMode ?? false,
       syncPresets: syncPresets ?? [],
+      units: normalizeUnitsConfig(units),
       hydrated: true
     })
-    ThemeEngine.apply({ ...mergedTheme, reducedMotion: (performanceMode ?? false) || mergedTheme.reducedMotion })
+    ThemeEngine.apply({
+      ...mergedTheme,
+      reducedMotion: (performanceMode ?? false) || mergedTheme.reducedMotion
+    })
   },
 
   setTheme: (patch) => {
@@ -235,6 +257,12 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     void persist.set(STORE_NS.SETTINGS, K.voice, voice)
   },
 
+  setUnits: (patch) => {
+    const units = normalizeUnitsConfig({ ...get().units, ...patch })
+    set({ units })
+    void persist.set(STORE_NS.SETTINGS, K.units, units)
+  },
+
   setModule: (key, on) => {
     const modules = { ...get().modules, [key]: on }
     set({ modules })
@@ -281,7 +309,8 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       voice: s.voice,
       modules: s.modules,
       performanceMode: s.performanceMode,
-      syncPresets: s.syncPresets
+      syncPresets: s.syncPresets,
+      units: s.units
     }
   },
 
@@ -304,7 +333,20 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     const modules = { ...defaultModules(), ...((data.modules as ModuleFlags) ?? {}) }
     const performanceMode = Boolean(data.performanceMode)
     const syncPresets = (data.syncPresets as SyncPreset[]) ?? []
-    set({ theme, alerts, favorites, tod, ai, market, voice, modules, performanceMode, syncPresets })
+    const units = normalizeUnitsConfig(data.units as Partial<UnitsConfig>)
+    set({
+      theme,
+      alerts,
+      favorites,
+      tod,
+      ai,
+      market,
+      voice,
+      modules,
+      performanceMode,
+      syncPresets,
+      units
+    })
     ThemeEngine.apply({ ...theme, reducedMotion: performanceMode || theme.reducedMotion })
     await Promise.all([
       persist.set(STORE_NS.SETTINGS, K.theme, theme),
@@ -316,7 +358,8 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       persist.set(STORE_NS.SETTINGS, K.voice, voice),
       persist.set(STORE_NS.SETTINGS, K.modules, modules),
       persist.set(STORE_NS.SETTINGS, K.performance, performanceMode),
-      persist.set(STORE_NS.SYNC, K.syncPresets, syncPresets)
+      persist.set(STORE_NS.SYNC, K.syncPresets, syncPresets),
+      persist.set(STORE_NS.SETTINGS, K.units, units)
     ])
   }
 }))

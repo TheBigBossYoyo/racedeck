@@ -9,13 +9,7 @@
  */
 
 export type StatusCategory =
-  | 'provider'
-  | 'auth'
-  | 'archive'
-  | 'live-socket'
-  | 'telemetry-enrichment'
-  | 'drm'
-  | 'sync'
+  'provider' | 'auth' | 'archive' | 'live-socket' | 'telemetry-enrichment' | 'drm' | 'sync'
 
 export type RecoveryActionId = 'sign-in' | 'reconnect' | 'recalibrate-sync' | 'retry-session'
 
@@ -62,7 +56,9 @@ export function buildSystemStatus(inputs: SystemStatusInputs): SystemStatusEntry
     })
   }
 
-  const subscriptionRejected = inputs.liveStatus?.detail?.toLowerCase().includes('subscription rejected')
+  const subscriptionRejected = inputs.liveStatus?.detail
+    ?.toLowerCase()
+    .includes('subscription rejected')
   if (subscriptionRejected) {
     entries.push({
       category: 'auth',
@@ -71,7 +67,11 @@ export function buildSystemStatus(inputs: SystemStatusInputs): SystemStatusEntry
       whatStillWorks: 'Public timing continues; car telemetry and positions need a fresh sign-in.',
       recoveryActionId: 'sign-in'
     })
-  } else if (!inputs.loggedIn && inputs.liveStatus?.state === 'connected' && !inputs.liveStatus.subscription) {
+  } else if (
+    !inputs.loggedIn &&
+    inputs.liveStatus?.state === 'connected' &&
+    !inputs.liveStatus.subscription
+  ) {
     entries.push({
       category: 'auth',
       severity: 'info',
@@ -96,7 +96,8 @@ export function buildSystemStatus(inputs: SystemStatusInputs): SystemStatusEntry
       category: 'telemetry-enrichment',
       severity: 'info',
       message: inputs.enrichmentIssue,
-      whatStillWorks: 'Core timing and the map remain fully usable; only extended telemetry/position enrichment is affected.',
+      whatStillWorks:
+        'Core timing and the map remain fully usable; only extended telemetry/position enrichment is affected.',
       recoveryActionId: null
     })
   }

@@ -3,6 +3,7 @@ import { Flag, ShieldAlert, Radio, Megaphone } from 'lucide-react'
 import { WidgetFrame } from '@renderer/components/ui/WidgetFrame'
 import { EmptyState } from '@renderer/components/ui/primitives'
 import { useSessionStore } from '@renderer/store/sessionStore'
+import { useSettingsStore } from '@renderer/store/settingsStore'
 import { formatClock, cn } from '@renderer/lib/utils'
 import type { FlagType, RaceControlMessage } from '@shared/models'
 
@@ -27,13 +28,15 @@ const SEV_STYLE: Record<RaceControlMessage['severity'], string> = {
 function iconFor(m: RaceControlMessage) {
   const t = m.category.toLowerCase()
   if (t.includes('safety')) return <ShieldAlert className="h-3.5 w-3.5" />
-  if (t.includes('drs') || t.includes('overtake') || t.includes('aero')) return <Radio className="h-3.5 w-3.5" />
+  if (t.includes('drs') || t.includes('overtake') || t.includes('aero'))
+    return <Radio className="h-3.5 w-3.5" />
   if (m.flag !== 'NONE') return <Flag className="h-3.5 w-3.5" />
   return <Megaphone className="h-3.5 w-3.5" />
 }
 
 export function RaceControlFeed() {
   const snapshot = useSessionStore((s) => s.snapshot)
+  const clockUnit = useSettingsStore((s) => s.units.clock)
   const driverMap = useMemo(() => {
     const m = new Map<number, string>()
     snapshot?.drivers.forEach((d) => m.set(d.number, d.code))
@@ -102,7 +105,7 @@ export function RaceControlFeed() {
                     {driverMap.get(m.driverNumber)}
                   </span>
                 )}
-                <span className="tnum ml-auto">{formatClock(m.date)}</span>
+                <span className="tnum ml-auto">{formatClock(m.date, clockUnit)}</span>
               </div>
             </div>
           </div>

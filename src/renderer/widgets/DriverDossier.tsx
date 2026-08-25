@@ -14,6 +14,7 @@ import { WidgetFrame } from '@renderer/components/ui/WidgetFrame'
 import { EmptyState, Badge, TyrePill } from '@renderer/components/ui/primitives'
 import { ErsGauge } from '@renderer/components/ui/ErsGauge'
 import { useSessionStore } from '@renderer/store/sessionStore'
+import { useSettingsStore } from '@renderer/store/settingsStore'
 import { useFocusDriver, pickDriver } from '@renderer/lib/useFocusDriver'
 import {
   StrategyEngine,
@@ -93,6 +94,7 @@ export function DriverDossier() {
   const snapshot = useSessionStore((s) => s.snapshot)
   const getDriverLaps = useSessionStore((s) => s.getDriverLaps)
   const getTelemetry = useSessionStore((s) => s.getTelemetry)
+  const speedUnit = useSettingsStore((s) => s.units.speed)
   const driver = useFocusDriver()
 
   /** Speed marks for the focused driver, when the feed carries TimingStats. */
@@ -292,7 +294,7 @@ export function DriverDossier() {
           {/* Speed marks (F1 TimingStats) — the two intermediates, finish line and
               speed trap, with where each ranks in the field. None of this can be
               derived from lap/sector timing; it only exists in this feed. */}
-          {speeds && <SpeedMarks speeds={speeds} />}
+          {speeds && <SpeedMarks speeds={speeds} speedUnit={speedUnit} />}
 
           {/* Tyre read — age, wear trend and what it means, in one glance */}
           <TyrePanel read={model.tyre} sectors={model.sectors} />

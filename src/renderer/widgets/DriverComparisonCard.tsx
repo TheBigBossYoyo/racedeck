@@ -3,7 +3,9 @@ import { Users } from 'lucide-react'
 import { WidgetFrame } from '@renderer/components/ui/WidgetFrame'
 import { EmptyState, TyrePill } from '@renderer/components/ui/primitives'
 import { useSessionStore } from '@renderer/store/sessionStore'
+import { useSettingsStore } from '@renderer/store/settingsStore'
 import { formatGap, formatLapTime, formatDelta, hexColor, cn } from '@renderer/lib/utils'
+import { convertSpeed, speedUnitLabel } from '@renderer/lib/units'
 import { alignTelemetryByLapTime } from '@renderer/core/engines/TelemetryCompare'
 import { TelemetryOverlayChart } from '@renderer/widgets/TelemetryOverlayChart'
 import type { Driver, TimingEntry } from '@shared/models'
@@ -78,6 +80,7 @@ export function DriverComparisonCard() {
   const focusDriver = useSessionStore((s) => s.focusDriver)
   const getDriverLaps = useSessionStore((s) => s.getDriverLaps)
   const getTelemetry = useSessionStore((s) => s.getTelemetry)
+  const speedUnit = useSettingsStore((s) => s.units.speed)
 
   const drivers = snapshot?.drivers ?? []
   const timing = snapshot?.timing ?? []
@@ -269,9 +272,9 @@ export function DriverComparisonCard() {
             return (
               <Row
                 key={key}
-                label={`${label} km/h Δ`}
-                a={d != null && d > 0 ? `+${d.toFixed(0)}` : ''}
-                b={d != null && d < 0 ? `+${(-d).toFixed(0)}` : ''}
+                label={`${label} ${speedUnitLabel(speedUnit)} Δ`}
+                a={d != null && d > 0 ? `+${convertSpeed(d, speedUnit).toFixed(0)}` : ''}
+                b={d != null && d < 0 ? `+${convertSpeed(-d, speedUnit).toFixed(0)}` : ''}
                 betterA={d != null && d > 0}
                 betterB={d != null && d < 0}
               />

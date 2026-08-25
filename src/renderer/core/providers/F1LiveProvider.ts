@@ -639,12 +639,17 @@ export class F1LiveProvider implements DataProvider {
     let carDataStream: Promise<void> | null = null
     const startCarData = (): void => {
       if (carDataStream) return
-      carDataStream = this.streamEnrichmentFeed(sessionId, loadVersion, 'carData').catch((e: unknown) => {
-        // Telemetry is optional; core timing and the map remain fully usable.
-        // Still recorded (APP_IMPROVEMENT_ROADMAP.md P2 item 32/28) so a
-        // silent degrade is visible in diagnostics instead of reading as a freeze.
-        this.enrichmentIssue = { feed: 'carData', message: e instanceof Error ? e.message : 'Unknown error' }
-      })
+      carDataStream = this.streamEnrichmentFeed(sessionId, loadVersion, 'carData').catch(
+        (e: unknown) => {
+          // Telemetry is optional; core timing and the map remain fully usable.
+          // Still recorded (APP_IMPROVEMENT_ROADMAP.md P2 item 32/28) so a
+          // silent degrade is visible in diagnostics instead of reading as a freeze.
+          this.enrichmentIssue = {
+            feed: 'carData',
+            message: e instanceof Error ? e.message : 'Unknown error'
+          }
+        }
+      )
     }
     try {
       await this.streamEnrichmentFeed(sessionId, loadVersion, 'position', () => {

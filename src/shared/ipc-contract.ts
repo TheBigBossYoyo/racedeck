@@ -229,5 +229,13 @@ export const STORE_NS = {
   FAVORITES: 'favorites',
   ALERTS: 'alerts',
   /** Per-meeting circuit outlines (one race weekend = one guaranteed layout). */
-  TRACK_PATHS: 'trackpaths'
+  TRACK_PATHS: 'trackpaths',
+  /** User-authored session notes, keyed per session id. */
+  ANNOTATIONS: 'annotations',
+  /** Race-watch profiles, keyed per session type. */
+  PROFILES: 'profiles',
+  /** Saved cross-race comparison summaries. */
+  COMPARISON_LIBRARY: 'comparisonLibrary',
+  /** User-authored local plugin scripts. */
+  PLUGINS: 'plugins'
 } as const

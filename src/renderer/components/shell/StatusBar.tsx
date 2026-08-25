@@ -1,4 +1,14 @@
-import { Bell, ShieldCheck, ShieldOff, Database, Flag, Radio, Minus, Plus, AlertTriangle } from 'lucide-react'
+import {
+  Bell,
+  ShieldCheck,
+  ShieldOff,
+  Database,
+  Flag,
+  Radio,
+  Minus,
+  Plus,
+  AlertTriangle
+} from 'lucide-react'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import { useSessionStore } from '@renderer/store/sessionStore'
 import { useAlertStore } from '@renderer/store/alertStore'
@@ -66,9 +76,14 @@ function IssuesIndicator() {
   return (
     <DropdownMenu.Root>
       <DropdownMenu.Trigger asChild>
-        <button className="no-drag flex items-center gap-1" title={`${entries.length} active issue${entries.length === 1 ? '' : 's'}`}>
+        <button
+          className="no-drag flex items-center gap-1"
+          title={`${entries.length} active issue${entries.length === 1 ? '' : 's'}`}
+        >
           <AlertTriangle className="h-3 w-3 text-warn" />
-          <span className="text-warn">{entries.length} issue{entries.length === 1 ? '' : 's'}</span>
+          <span className="text-warn">
+            {entries.length} issue{entries.length === 1 ? '' : 's'}
+          </span>
         </button>
       </DropdownMenu.Trigger>
       <DropdownMenu.Portal>
@@ -80,7 +95,12 @@ function IssuesIndicator() {
           {entries.map((entry, i) => (
             <div key={i} className="rounded-lg border border-hairline/20 bg-white/[0.02] p-2">
               <div className="flex items-center justify-between gap-2">
-                <span className={cn('text-[10px] font-semibold uppercase tracking-wide', SEVERITY_TONE[entry.severity])}>
+                <span
+                  className={cn(
+                    'text-[10px] font-semibold uppercase tracking-wide',
+                    SEVERITY_TONE[entry.severity]
+                  )}
+                >
                   {entry.category}
                 </span>
                 {entry.recoveryActionId && (
@@ -94,7 +114,9 @@ function IssuesIndicator() {
               </div>
               <p className="mt-1 text-2xs leading-snug text-fg">{entry.message}</p>
               {entry.whatStillWorks && (
-                <p className="mt-0.5 text-2xs leading-snug text-fg-subtle">{entry.whatStillWorks}</p>
+                <p className="mt-0.5 text-2xs leading-snug text-fg-subtle">
+                  {entry.whatStillWorks}
+                </p>
               )}
             </div>
           ))}

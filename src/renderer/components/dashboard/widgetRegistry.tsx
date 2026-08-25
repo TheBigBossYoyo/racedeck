@@ -107,6 +107,12 @@ const PositionTrendChartWidget = lazyWidget(() =>
 const TelemetryTracePanelWidget = lazyWidget(() =>
   import('@renderer/widgets/TelemetryTracePanel').then((m) => ({ default: m.TelemetryTracePanel }))
 )
+const AnnotationsPanelWidget = lazyWidget(() =>
+  import('@renderer/widgets/AnnotationsPanel').then((m) => ({ default: m.AnnotationsPanel }))
+)
+const PluginsPanelWidget = lazyWidget(() =>
+  import('@renderer/widgets/PluginsPanel').then((m) => ({ default: m.PluginsPanel }))
+)
 
 const REGISTRY: Record<WidgetKey, React.ComponentType> = {
   'tod-video': TodVideoPanel,
@@ -139,7 +145,9 @@ const REGISTRY: Record<WidgetKey, React.ComponentType> = {
   sync: SessionSyncController,
   'practice-runs': PracticeRunWidget,
   'practice-intelligence': PracticeIntelligenceWidget,
-  'weekend-upgrades': WeekendUpgradesWidget
+  'weekend-upgrades': WeekendUpgradesWidget,
+  annotations: AnnotationsPanelWidget,
+  plugins: PluginsPanelWidget
 }
 
 export const WidgetRenderer = memo(function WidgetRenderer({

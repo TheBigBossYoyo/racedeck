@@ -1,5 +1,6 @@
 import type { RaceSnapshot } from '@renderer/core/providers/types'
 import type { RaceBookmark } from '@renderer/core/engines/RaceBookmarks'
+import type { UserAnnotation } from '@renderer/core/engines/UserAnnotations'
 import { buildPitStopHistory, type PitStopRecord } from '@renderer/core/engines/PitHistory'
 import { buildTyreRead } from '@renderer/core/engines/TyreRead'
 
@@ -28,6 +29,7 @@ export interface Debrief {
   generatedAtDataSec: number
   drivers: DebriefDriverSummary[]
   bookmarks: readonly RaceBookmark[]
+  annotations: readonly UserAnnotation[]
   provenanceNote: string
 }
 
@@ -51,7 +53,8 @@ function tyreTrendHeadlineFor(snapshot: RaceSnapshot, driverNumber: number): str
 export function buildDebrief(
   snapshot: RaceSnapshot,
   bookmarks: readonly RaceBookmark[],
-  selectedDriverNumbers?: readonly number[]
+  selectedDriverNumbers?: readonly number[],
+  annotations: readonly UserAnnotation[] = []
 ): Debrief {
   const targetNumbers =
     selectedDriverNumbers && selectedDriverNumbers.length > 0
@@ -81,6 +84,7 @@ export function buildDebrief(
     generatedAtDataSec: snapshot.clock,
     drivers,
     bookmarks,
+    annotations,
     provenanceNote:
       'Pit-lane durations are measured. SC/VSC and penalty tags are inferred from nearby ' +
       'race-control text, not directly measured. Tyre trends are a fuel-corrected model ' +
@@ -128,6 +132,16 @@ export function debriefToMarkdown(debrief: Debrief): string {
   lines.push('## Timeline')
   for (const b of debrief.bookmarks) {
     lines.push(`- ${formatClock(b.t)} — ${b.label}`)
+  }
+  if (debrief.annotations.length > 0) {
+    lines.push('')
+    lines.push('## Notes')
+    for (const a of debrief.annotations) {
+      const code = debrief.drivers.find((d) => d.driverNumber === a.driverNumber)?.code
+      const who = a.driverNumber != null ? ` [${code ?? `#${a.driverNumber}`}]` : ''
+      const tag = a.tag ? ` (${a.tag})` : ''
+      lines.push(`- ${formatClock(a.t)}${who}${tag} — ${a.text}`)
+    }
   }
   lines.push('')
   lines.push('## Provenance')

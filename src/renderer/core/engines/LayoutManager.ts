@@ -48,6 +48,8 @@ export type WidgetKey =
   | 'practice-runs'
   | 'practice-intelligence'
   | 'weekend-upgrades'
+  | 'annotations'
+  | 'plugins'
 
 export interface PanelLayout {
   i: WidgetKey
@@ -86,37 +88,150 @@ export const GRID_MARGIN: [number, number] = [10, 10]
 const SZ = (w: number, h: number, minW = 3, minH = 5) => ({ w, h, minW, minH })
 
 export const WIDGET_CATALOG: Record<WidgetKey, WidgetMeta> = {
-  'tod-video': { key: 'tod-video', title: 'TOD Broadcast', isVideo: true, group: 'video', defaultSize: SZ(6, 12, 4, 8) },
-  'timing-tower': { key: 'timing-tower', title: 'Timing Tower', group: 'timing', defaultSize: SZ(4, 14, 3, 8) },
-  'qualifying-monitor': { key: 'qualifying-monitor', title: 'Qualifying Monitor', group: 'timing', defaultSize: SZ(5, 15, 4, 10) },
+  'tod-video': {
+    key: 'tod-video',
+    title: 'TOD Broadcast',
+    isVideo: true,
+    group: 'video',
+    defaultSize: SZ(6, 12, 4, 8)
+  },
+  'timing-tower': {
+    key: 'timing-tower',
+    title: 'Timing Tower',
+    group: 'timing',
+    defaultSize: SZ(4, 14, 3, 8)
+  },
+  'qualifying-monitor': {
+    key: 'qualifying-monitor',
+    title: 'Qualifying Monitor',
+    group: 'timing',
+    defaultSize: SZ(5, 15, 4, 10)
+  },
   'track-map': { key: 'track-map', title: 'Track Map', group: 'timing', defaultSize: SZ(3, 9) },
-  'race-control': { key: 'race-control', title: 'Race Control', group: 'timing', defaultSize: SZ(3, 9) },
+  'race-control': {
+    key: 'race-control',
+    title: 'Race Control',
+    group: 'timing',
+    defaultSize: SZ(3, 9)
+  },
   'team-radio': { key: 'team-radio', title: 'Team Radio', group: 'timing', defaultSize: SZ(3, 8) },
   weather: { key: 'weather', title: 'Weather', group: 'timing', defaultSize: SZ(3, 6) },
-  'tyre-strategy': { key: 'tyre-strategy', title: 'Tyre Strategy', group: 'strategy', defaultSize: SZ(4, 10) },
+  'tyre-strategy': {
+    key: 'tyre-strategy',
+    title: 'Tyre Strategy',
+    group: 'strategy',
+    defaultSize: SZ(4, 10)
+  },
   'gap-chart': { key: 'gap-chart', title: 'Gap to Leader', group: 'charts', defaultSize: SZ(4, 9) },
-  'lap-time-chart': { key: 'lap-time-chart', title: 'Lap Times', group: 'charts', defaultSize: SZ(4, 9) },
-  'position-trend': { key: 'position-trend', title: 'Position Trend', group: 'charts', defaultSize: SZ(4, 9) },
-  'driver-comparison': { key: 'driver-comparison', title: 'Driver Comparison', group: 'strategy', defaultSize: SZ(6, 11, 4, 8) },
+  'lap-time-chart': {
+    key: 'lap-time-chart',
+    title: 'Lap Times',
+    group: 'charts',
+    defaultSize: SZ(4, 9)
+  },
+  'position-trend': {
+    key: 'position-trend',
+    title: 'Position Trend',
+    group: 'charts',
+    defaultSize: SZ(4, 9)
+  },
+  'driver-comparison': {
+    key: 'driver-comparison',
+    title: 'Driver Comparison',
+    group: 'strategy',
+    defaultSize: SZ(6, 11, 4, 8)
+  },
   telemetry: { key: 'telemetry', title: 'Telemetry', group: 'charts', defaultSize: SZ(6, 8) },
-  'strategy-insights': { key: 'strategy-insights', title: 'Strategy Insights', group: 'strategy', defaultSize: SZ(4, 10) },
-  'pit-predictor': { key: 'pit-predictor', title: 'Pit-Now Simulator', group: 'strategy', defaultSize: SZ(4, 17, 4, 12) },
-  'stint-planner': { key: 'stint-planner', title: 'Stint Planner', group: 'strategy', defaultSize: SZ(4, 13, 4, 9) },
-  'pace-battle': { key: 'pace-battle', title: 'Pace Battle', group: 'strategy', defaultSize: SZ(4, 9, 3, 7) },
-  'driver-dossier': { key: 'driver-dossier', title: 'Driver Dossier', group: 'strategy', defaultSize: SZ(4, 20, 4, 14) },
-  'ai-engineer': { key: 'ai-engineer', title: 'AI Race Engineer', group: 'strategy', defaultSize: SZ(4, 17, 4, 12) },
+  'strategy-insights': {
+    key: 'strategy-insights',
+    title: 'Strategy Insights',
+    group: 'strategy',
+    defaultSize: SZ(4, 10)
+  },
+  'pit-predictor': {
+    key: 'pit-predictor',
+    title: 'Pit-Now Simulator',
+    group: 'strategy',
+    defaultSize: SZ(4, 17, 4, 12)
+  },
+  'stint-planner': {
+    key: 'stint-planner',
+    title: 'Stint Planner',
+    group: 'strategy',
+    defaultSize: SZ(4, 13, 4, 9)
+  },
+  'pace-battle': {
+    key: 'pace-battle',
+    title: 'Pace Battle',
+    group: 'strategy',
+    defaultSize: SZ(4, 9, 3, 7)
+  },
+  'driver-dossier': {
+    key: 'driver-dossier',
+    title: 'Driver Dossier',
+    group: 'strategy',
+    defaultSize: SZ(4, 20, 4, 14)
+  },
+  'ai-engineer': {
+    key: 'ai-engineer',
+    title: 'AI Race Engineer',
+    group: 'strategy',
+    defaultSize: SZ(4, 17, 4, 12)
+  },
   'team-pace': { key: 'team-pace', title: 'Team Pace', group: 'strategy', defaultSize: SZ(4, 11) },
   'tyre-lab': { key: 'tyre-lab', title: 'Tyre Lab', group: 'strategy', defaultSize: SZ(4, 12) },
-  'win-probability': { key: 'win-probability', title: 'Win Probability', group: 'strategy', defaultSize: SZ(4, 15, 3, 9) },
-  championship: { key: 'championship', title: 'Championship', group: 'strategy', defaultSize: SZ(4, 14, 3, 9) },
-  'battle-radar': { key: 'battle-radar', title: 'Battle Radar', group: 'timing', defaultSize: SZ(4, 12, 3, 7) },
-  'race-story': { key: 'race-story', title: 'Race Story', group: 'timing', defaultSize: SZ(3, 12, 3, 7) },
-  'engineer-notes': { key: 'engineer-notes', title: "Engineer's Notes", group: 'strategy', defaultSize: SZ(4, 12, 3, 7) },
+  'win-probability': {
+    key: 'win-probability',
+    title: 'Win Probability',
+    group: 'strategy',
+    defaultSize: SZ(4, 15, 3, 9)
+  },
+  championship: {
+    key: 'championship',
+    title: 'Championship',
+    group: 'strategy',
+    defaultSize: SZ(4, 14, 3, 9)
+  },
+  'battle-radar': {
+    key: 'battle-radar',
+    title: 'Battle Radar',
+    group: 'timing',
+    defaultSize: SZ(4, 12, 3, 7)
+  },
+  'race-story': {
+    key: 'race-story',
+    title: 'Race Story',
+    group: 'timing',
+    defaultSize: SZ(3, 12, 3, 7)
+  },
+  'engineer-notes': {
+    key: 'engineer-notes',
+    title: "Engineer's Notes",
+    group: 'strategy',
+    defaultSize: SZ(4, 12, 3, 7)
+  },
   alerts: { key: 'alerts', title: 'Alert Center', group: 'tools', defaultSize: SZ(4, 6) },
   sync: { key: 'sync', title: 'Sync Controller', group: 'tools', defaultSize: SZ(5, 6) },
-  'practice-runs': { key: 'practice-runs', title: 'Practice Run Board', group: 'timing', defaultSize: SZ(5, 16, 4, 10) },
-  'practice-intelligence': { key: 'practice-intelligence', title: 'Practice Driver Watch', group: 'timing', defaultSize: SZ(5, 16, 4, 10) },
-  'weekend-upgrades': { key: 'weekend-upgrades', title: 'Weekend Upgrades', group: 'strategy', defaultSize: SZ(4, 14, 4, 9) }
+  'practice-runs': {
+    key: 'practice-runs',
+    title: 'Practice Run Board',
+    group: 'timing',
+    defaultSize: SZ(5, 16, 4, 10)
+  },
+  'practice-intelligence': {
+    key: 'practice-intelligence',
+    title: 'Practice Driver Watch',
+    group: 'timing',
+    defaultSize: SZ(5, 16, 4, 10)
+  },
+  'weekend-upgrades': {
+    key: 'weekend-upgrades',
+    title: 'Weekend Upgrades',
+    group: 'strategy',
+    defaultSize: SZ(4, 14, 4, 9)
+  },
+  annotations: { key: 'annotations', title: 'Notes', group: 'tools', defaultSize: SZ(4, 11) },
+  plugins: { key: 'plugins', title: 'Plugins', group: 'tools', defaultSize: SZ(4, 13) }
 }
 
 /** Default panel for a widget added via the palette. */
@@ -177,7 +292,8 @@ export const LAYOUT_PRESETS: Record<LayoutId, LayoutPreset> = {
   'strategy-wall': {
     id: 'strategy-wall',
     name: 'Strategy Wall',
-    description: 'Pit-wall command: driver call, rejoin risk, race plan, win outlook and live engineering context.',
+    description:
+      'Pit-wall command: driver call, rejoin risk, race plan, win outlook and live engineering context.',
     videoSize: 'medium',
     grid: [
       P('timing-tower', 0, 0, 3, 18, 3, 8),
@@ -195,7 +311,8 @@ export const LAYOUT_PRESETS: Record<LayoutId, LayoutPreset> = {
   'qualifying-pro': {
     id: 'qualifying-pro',
     name: 'Qualifying Pro',
-    description: 'Qualifying command: cutline, run state, sectors, track evolution and driver traces.',
+    description:
+      'Qualifying command: cutline, run state, sectors, track evolution and driver traces.',
     videoSize: 'large',
     grid: [
       P('tod-video', 0, 0, 8, 18, 5, 10),
@@ -213,7 +330,8 @@ export const LAYOUT_PRESETS: Record<LayoutId, LayoutPreset> = {
   'practice-lab': {
     id: 'practice-lab',
     name: 'Practice Lab',
-    description: 'Practice engineering: run programmes, rookie swaps, long-run pace and weekend upgrades.',
+    description:
+      'Practice engineering: run programmes, rookie swaps, long-run pace and weekend upgrades.',
     videoSize: 'large',
     grid: [
       P('tod-video', 0, 0, 7, 16, 5, 10),
@@ -232,7 +350,8 @@ export const LAYOUT_PRESETS: Record<LayoutId, LayoutPreset> = {
   'minimal-watch': {
     id: 'minimal-watch',
     name: 'Minimal Watch',
-    description: 'Lean race view: maximum broadcast, compact timing and a readable essentials strip.',
+    description:
+      'Lean race view: maximum broadcast, compact timing and a readable essentials strip.',
     videoSize: 'xl',
     grid: [
       P('tod-video', 0, 0, 9, 21, 5, 10),

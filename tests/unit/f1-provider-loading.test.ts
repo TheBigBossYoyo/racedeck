@@ -29,7 +29,10 @@ vi.mock('@renderer/store/persist', () => ({
   }
 }))
 
-import { F1LiveProvider, TRACK_PATH_CACHE_SCHEMA_VERSION } from '@renderer/core/providers/F1LiveProvider'
+import {
+  F1LiveProvider,
+  TRACK_PATH_CACHE_SCHEMA_VERSION
+} from '@renderer/core/providers/F1LiveProvider'
 
 const TRACK_PATH_KEY = `trackpaths:v${TRACK_PATH_CACHE_SCHEMA_VERSION}/2026/Test_Grand_Prix`
 import { DataProviderManager } from '@renderer/core/DataProviderManager'

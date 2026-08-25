@@ -1,4 +1,12 @@
-import { LayoutDashboard, Rewind, Target, Settings, Info, type LucideIcon } from 'lucide-react'
+import {
+  LayoutDashboard,
+  Rewind,
+  Target,
+  Scale,
+  Settings,
+  Info,
+  type LucideIcon
+} from 'lucide-react'
 import { useAppStore, type Route } from '@renderer/store/appStore'
 import { useLayoutStore } from '@renderer/store/layoutStore'
 import { Tooltip } from '@renderer/components/ui/controls'
@@ -8,6 +16,7 @@ const NAV: { route: Route; icon: LucideIcon; label: string }[] = [
   { route: 'dashboard', icon: LayoutDashboard, label: 'Dashboard' },
   { route: 'replay', icon: Rewind, label: 'Replay' },
   { route: 'strategy', icon: Target, label: 'Strategy Wall' },
+  { route: 'compare', icon: Scale, label: 'Comparison Library' },
   { route: 'settings', icon: Settings, label: 'Settings' }
 ]
 

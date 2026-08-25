@@ -53,7 +53,8 @@ export function recalibrateNow(): void {
     : Number.NaN
   sync.buildCandidates(session.getRaceControlHistory(), markLiveSec, startMs)
   const best = bestCandidate(useSyncStore.getState().candidates)
-  if (best) void sync.calibrate(syncMath.offsetForLiveAlignment(markLiveSec, best.dataSec), best.label)
+  if (best)
+    void sync.calibrate(syncMath.offsetForLiveAlignment(markLiveSec, best.dataSec), best.label)
 }
 
 export function SyncHealthIndicator() {

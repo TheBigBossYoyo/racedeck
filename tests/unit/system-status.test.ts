@@ -23,14 +23,20 @@ describe('buildSystemStatus', () => {
   it('classifies a session load error as a retryable provider issue', () => {
     const entries = buildSystemStatus(inputs({ sessionError: 'Could not load session: boom' }))
     expect(entries).toHaveLength(1)
-    expect(entries[0]).toMatchObject({ category: 'provider', severity: 'danger', recoveryActionId: 'retry-session' })
+    expect(entries[0]).toMatchObject({
+      category: 'provider',
+      severity: 'danger',
+      recoveryActionId: 'retry-session'
+    })
   })
 
   it('classifies a live-socket error as reconnectable', () => {
     const entries = buildSystemStatus(
       inputs({ liveStatus: { state: 'error', detail: 'boom', subscription: false } })
     )
-    expect(entries.some((e) => e.category === 'live-socket' && e.recoveryActionId === 'reconnect')).toBe(true)
+    expect(
+      entries.some((e) => e.category === 'live-socket' && e.recoveryActionId === 'reconnect')
+    ).toBe(true)
   })
 
   it('classifies a rejected subscription as a sign-in issue with warning severity', () => {

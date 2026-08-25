@@ -47,7 +47,9 @@ export function AboutPage() {
           <ul className="space-y-1.5 text-xs leading-relaxed text-fg-muted">
             <li>• TOD is integrated only through a legal, user-authenticated browser surface.</li>
             <li>• RaceDeck never bypasses DRM/Widevine or any content protection.</li>
-            <li>• It never extracts stream URLs, intercepts license keys, or reads cookies/tokens.</li>
+            <li>
+              • It never extracts stream URLs, intercepts license keys, or reads cookies/tokens.
+            </li>
             <li>• It never reverse-engineers protected playback or pirates content.</li>
             <li>
               • DRM playback requires the castLabs Electron build; this build is{' '}
@@ -69,9 +71,18 @@ export function AboutPage() {
             <h2 className="text-sm font-semibold text-fg">TOD surface modes</h2>
           </div>
           <div className="space-y-2 text-xs text-fg-muted">
-            <p><b className="text-good">Embedded</b> — TOD runs inside RaceDeck via a secure, top-level browser surface with Widevine support.</p>
-            <p><b className="text-accent">Companion window</b> — when embedding is blocked, TOD runs in a docked companion window managed by RaceDeck.</p>
-            <p><b className="text-warn">External</b> — as a last resort, TOD opens in your default browser and the dashboard stays synced.</p>
+            <p>
+              <b className="text-good">Embedded</b> — TOD runs inside RaceDeck via a secure,
+              top-level browser surface with Widevine support.
+            </p>
+            <p>
+              <b className="text-accent">Companion window</b> — when embedding is blocked, TOD runs
+              in a docked companion window managed by RaceDeck.
+            </p>
+            <p>
+              <b className="text-warn">External</b> — as a last resort, TOD opens in your default
+              browser and the dashboard stays synced.
+            </p>
           </div>
         </div>
 
@@ -81,8 +92,13 @@ export function AboutPage() {
             <h2 className="text-sm font-semibold text-fg">Data & credits</h2>
           </div>
           <ul className="space-y-1 text-xs text-fg-muted">
-            <li>• Official F1 Live Timing powers primary replay/live data; OpenF1 remains an optional provider.</li>
-            <li>• Widevine-capable Electron by <b className="text-fg">castLabs ECS</b>.</li>
+            <li>
+              • Official F1 Live Timing powers primary replay/live data; OpenF1 remains an optional
+              provider.
+            </li>
+            <li>
+              • Widevine-capable Electron by <b className="text-fg">castLabs ECS</b>.
+            </li>
             <li>• Bundled Demo Grand Prix data is synthetic and deterministic.</li>
             <li>• Not affiliated with Formula 1, TOD, beIN, or OpenF1.</li>
           </ul>

@@ -2,7 +2,7 @@ import { create } from 'zustand'
 import type { AppInfo } from '@shared/ipc-contract'
 import { hasBridge, bridge } from '@renderer/lib/ipc'
 
-export type Route = 'dashboard' | 'replay' | 'strategy' | 'settings' | 'about'
+export type Route = 'dashboard' | 'replay' | 'strategy' | 'compare' | 'settings' | 'about'
 
 interface AppStoreState {
   info: AppInfo | null

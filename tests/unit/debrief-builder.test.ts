@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { buildDebrief, debriefToMarkdown } from '@renderer/core/engines/DebriefBuilder'
 import type { RaceBookmark } from '@renderer/core/engines/RaceBookmarks'
+import { createAnnotation } from '@renderer/core/engines/UserAnnotations'
 import type { RaceSnapshot } from '@renderer/core/providers/types'
 import type { Driver, PitLaneTime, SectorTime, TimingEntry } from '@shared/models'
 
@@ -151,5 +152,28 @@ describe('debriefToMarkdown', () => {
     const debrief = buildDebrief(snapshot({ pitLaneTimes }), bookmarks)
     const md = debriefToMarkdown(debrief)
     expect(md).toMatch(/Lap 20: 22\.0s/)
+  })
+
+  it('renders a Notes section with driver code and tag when annotations are given', () => {
+    const note = createAnnotation({
+      sessionId: 'debrief',
+      t: 120,
+      driverNumber: 1,
+      lapNumber: 3,
+      tag: 'strategy',
+      text: 'Undercut window opening'
+    })
+    const debrief = buildDebrief(snapshot(), bookmarks, undefined, [note])
+    const md = debriefToMarkdown(debrief)
+    expect(md).toContain('## Notes')
+    expect(md).toContain('[ONE]')
+    expect(md).toContain('(strategy)')
+    expect(md).toContain('Undercut window opening')
+  })
+
+  it('omits the Notes section entirely when there are no annotations', () => {
+    const debrief = buildDebrief(snapshot(), bookmarks)
+    const md = debriefToMarkdown(debrief)
+    expect(md).not.toContain('## Notes')
   })
 })

@@ -3,7 +3,9 @@ import { CloudRain, Wind, Droplets, Thermometer, Gauge, Sun } from 'lucide-react
 import { WidgetFrame } from '@renderer/components/ui/WidgetFrame'
 import { EmptyState, Badge, ProvenanceBadge } from '@renderer/components/ui/primitives'
 import { useSessionStore } from '@renderer/store/sessionStore'
+import { useSettingsStore } from '@renderer/store/settingsStore'
 import { cn } from '@renderer/lib/utils'
+import { formatTemp } from '@renderer/lib/units'
 import {
   weatherFieldTrend,
   rainTransition,
@@ -75,6 +77,7 @@ function Spark({ values, color }: { values: number[]; color: string }) {
 
 export function WeatherPanel() {
   const snapshot = useSessionStore((s) => s.snapshot)
+  const tempUnit = useSettingsStore((s) => s.units.temperature)
   const w = snapshot?.weather
   const history = snapshot?.weatherHistory ?? []
 
@@ -105,14 +108,12 @@ export function WeatherPanel() {
         <Stat
           icon={<Thermometer className="h-4 w-4" />}
           label="Air"
-          value={w.airTemp?.toFixed(1) ?? '—'}
-          unit="°C"
+          value={formatTemp(w.airTemp, tempUnit)}
         />
         <Stat
           icon={<Thermometer className="h-4 w-4" />}
           label="Track"
-          value={w.trackTemp?.toFixed(1) ?? '—'}
-          unit="°C"
+          value={formatTemp(w.trackTemp, tempUnit)}
           tone="warn"
         />
         <Stat
@@ -145,7 +146,7 @@ export function WeatherPanel() {
           <div className="mb-1 flex items-center justify-between text-[10px] uppercase tracking-wide text-fg-subtle">
             <span>Track temp trend</span>
             <span className="tnum text-fg-muted">
-              {trackTrend[trackTrend.length - 1].toFixed(1)}°C
+              {formatTemp(trackTrend[trackTrend.length - 1], tempUnit)}
             </span>
           </div>
           <Spark values={trackTrend} color="rgb(245 158 11)" />
@@ -155,7 +156,9 @@ export function WeatherPanel() {
         <div className="mt-1.5 rounded-lg border border-hairline/20 bg-white/[0.02] px-2.5 py-2">
           <div className="mb-1 flex items-center justify-between text-[10px] uppercase tracking-wide text-fg-subtle">
             <span>Air temp trend ({airDirection})</span>
-            <span className="tnum text-fg-muted">{airTrend[airTrend.length - 1].toFixed(1)}°C</span>
+            <span className="tnum text-fg-muted">
+              {formatTemp(airTrend[airTrend.length - 1], tempUnit)}
+            </span>
           </div>
           <Spark values={airTrend} color="rgb(96 165 250)" />
         </div>

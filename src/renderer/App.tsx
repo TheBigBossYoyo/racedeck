@@ -20,6 +20,9 @@ import { useVoiceReadout } from '@renderer/lib/useSpeech'
 import { CommandPalette } from '@renderer/components/shell/CommandPalette'
 import { WelcomeTour } from '@renderer/components/shell/WelcomeTour'
 import { useOnboardingStore } from '@renderer/store/onboardingStore'
+import { useProfileStore } from '@renderer/store/profileStore'
+import { useComparisonLibraryStore } from '@renderer/store/comparisonLibraryStore'
+import { usePluginStore } from '@renderer/store/pluginStore'
 
 const ReplayView = lazy(() =>
   import('@renderer/components/ReplayView').then((module) => ({ default: module.ReplayView }))
@@ -29,6 +32,11 @@ const SettingsPage = lazy(() =>
 )
 const AboutPage = lazy(() =>
   import('@renderer/components/AboutPage').then((module) => ({ default: module.AboutPage }))
+)
+const ComparisonLibraryPage = lazy(() =>
+  import('@renderer/components/ComparisonLibraryPage').then((module) => ({
+    default: module.ComparisonLibraryPage
+  }))
 )
 
 function RouteFallback() {
@@ -47,6 +55,9 @@ function useBootstrap() {
       await Promise.all([
         useSyncStore.getState().hydrate(),
         useLayoutStore.getState().hydrate(),
+        useProfileStore.getState().hydrate(),
+        useComparisonLibraryStore.getState().hydrate(),
+        usePluginStore.getState().hydrate(),
         useAppStore.getState().init()
       ])
       if (cancelled) return
@@ -54,7 +65,8 @@ function useBootstrap() {
       useLiveStore.getState().init()
       await useSessionStore.getState().init()
       // Keep the AlertEngine config in lockstep with settings.
-      const applyAlerts = () => useAlertStore.getState().setConfig(useSettingsStore.getState().alerts)
+      const applyAlerts = () =>
+        useAlertStore.getState().setConfig(useSettingsStore.getState().alerts)
       applyAlerts()
       unsub = useSettingsStore.subscribe(applyAlerts)
       useAppStore.getState().setReady(true)
@@ -86,6 +98,7 @@ export function App() {
             {(route === 'dashboard' || route === 'strategy') && <DashboardView />}
             <Suspense fallback={<RouteFallback />}>
               {route === 'replay' && <ReplayView />}
+              {route === 'compare' && <ComparisonLibraryPage />}
               {route === 'settings' && <SettingsPage />}
               {route === 'about' && <AboutPage />}
             </Suspense>

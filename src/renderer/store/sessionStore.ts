@@ -12,6 +12,8 @@ import { useAlertStore } from './alertStore'
 import { useSettingsStore } from './settingsStore'
 import { useRaceStoryStore } from './raceStoryStore'
 import { useEngineerNotesStore } from './engineerNotesStore'
+import { useAnnotationsStore } from './annotationsStore'
+import { useProfileStore } from './profileStore'
 import { syncMath } from '@renderer/core/engines/SessionSyncEngine'
 import { shouldPauseAtDataEdge } from '@shared/f1-session-state'
 import { buildRaceBookmarks, type RaceBookmark } from '@renderer/core/engines/RaceBookmarks'
@@ -132,6 +134,7 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
         loadingSession: false,
         error: null
       })
+      useAnnotationsStore.getState().reset()
       useSyncStore.getState().setFollowEligible(false)
       await get().refreshSessions()
     } catch (e) {
@@ -171,6 +174,7 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
       useAlertStore.getState().resetEngine()
       useRaceStoryStore.getState().reset()
       useEngineerNotesStore.getState().reset()
+      void useAnnotationsStore.getState().hydrateForSession(session.id)
       const startClock =
         opts?.seekFraction != null
           ? clamp(opts.seekFraction * duration, 0, duration)
@@ -197,6 +201,13 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
         focusDriver: null,
         comparison: null
       })
+      // Auto-apply a saved race-watch profile (APP_IMPROVEMENT_ROADMAP.md P3
+      // item 33) for this session's type, when one exists and the user hasn't
+      // turned auto-apply off.
+      const profileStore = useProfileStore.getState()
+      if (profileStore.autoApply && profileStore.hasProfile(session.type)) {
+        profileStore.applyProfile(session.type)
+      }
       // Following the TOD video only means anything while the data clock IS real
       // time. Told here rather than from the sync widget, so it stays right even
       // when that widget is not part of the user's layout.

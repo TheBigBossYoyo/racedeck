@@ -68,7 +68,10 @@ const archive: F1SessionData = {
   sessionInfo: {},
   streams: {
     DriverList: [
-      { t: 0, d: { '1': { RacingNumber: '1', Tla: 'TST' }, '2': { RacingNumber: '2', Tla: 'ALT' } } }
+      {
+        t: 0,
+        d: { '1': { RacingNumber: '1', Tla: 'TST' }, '2': { RacingNumber: '2', Tla: 'ALT' } }
+      }
     ],
     TimingData: Array.from({ length: 8 }, (_, i) => {
       const lap = i + 1
@@ -85,15 +88,32 @@ const archive: F1SessionData = {
     TimingAppData: [
       {
         t: 0,
-        d: { Lines: { '1': { Stints: { '0': { Compound: 'MEDIUM', StartLaps: 0, TotalLaps: 1, New: 'true' } } } } }
+        d: {
+          Lines: {
+            '1': {
+              Stints: { '0': { Compound: 'MEDIUM', StartLaps: 0, TotalLaps: 1, New: 'true' } }
+            }
+          }
+        }
       },
       {
         t: 45,
-        d: { Lines: { '1': { Stints: { '1': { Compound: 'HARD', StartLaps: 0, TotalLaps: 1, New: 'true' } } } } }
+        d: {
+          Lines: {
+            '1': { Stints: { '1': { Compound: 'HARD', StartLaps: 0, TotalLaps: 1, New: 'true' } } }
+          }
+        }
       }
     ],
     RaceControlMessages: [
-      { t: 25, d: { Messages: [{ Category: 'Flag', Message: 'YELLOW FLAG SECTOR 2', Flag: 'YELLOW', Sector: 2 }] } },
+      {
+        t: 25,
+        d: {
+          Messages: [
+            { Category: 'Flag', Message: 'YELLOW FLAG SECTOR 2', Flag: 'YELLOW', Sector: 2 }
+          ]
+        }
+      },
       { t: 55, d: { Messages: [{ Category: 'Flag', Message: 'GREEN FLAG', Flag: 'GREEN' }] } }
     ],
     TrackStatus: [
