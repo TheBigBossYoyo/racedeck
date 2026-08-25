@@ -664,21 +664,30 @@ function stableKey(value: string): string {
 const TRACK_PATH_MAX_POINTS = 700
 
 /**
- * Whichever driver has the most on-track samples in the opening window —
- * the one whose trajectory `buildTrackPath`/`buildClosedTrackPath` follow.
- * Exported (alongside `debugTrackTraceInfo`) purely for diagnostics: the map
- * outline has gone through several rounds of live-session bug reports where
- * static analysis alone couldn't pin down which stage was actually failing
- * (no reference driver found vs. found but never accumulating vs.
- * accumulating but never closing) — these numbers make that visible instead
- * of guessed at.
+ * Whichever driver has the most on-track samples SO FAR — the one whose
+ * trajectory `buildTrackPath`/`buildClosedTrackPath` follow. Exported
+ * (alongside `debugTrackTraceInfo`) purely for diagnostics: the map outline
+ * has gone through several rounds of live-session bug reports where static
+ * analysis alone couldn't pin down which stage was actually failing (no
+ * reference driver found vs. found but never accumulating vs. accumulating
+ * but never closing) — these numbers make that visible instead of guessed
+ * at.
+ *
+ * Previously capped to the first 600 raw points ("sample well beyond the
+ * opening frames"), on the assumption that ~600 points was several minutes
+ * of real time. Live diagnostics from an actual session proved that wrong:
+ * 10,850 points had accumulated over 2-3 minutes with a reference driver
+ * still unfound, because the real feed's incremental per-car cadence means
+ * 600 points can be just a few seconds — nowhere near "well beyond the
+ * opening frames" if the session starts on the grid, a formation lap, or
+ * anyone still queued in the pit lane. There is no meaningful cost to
+ * scanning everything: this is a single pass over cheap lookups, called at
+ * most a few times a second, and only ever WHILE the outline hasn't closed
+ * yet (closure short-circuits every future call once found).
  */
 export function pickReferenceDriver(points: F1StreamPoint[]): number | null {
   const presence = new Map<number, number>()
-  // Sample well beyond the opening frames: in practice and qualifying the first
-  // minutes can be an empty track, and the reference car must be one that
-  // actually runs.
-  for (const point of points.slice(0, 600)) {
+  for (const point of points) {
     const entries = positionEntries(point.d)
     for (const [key, raw] of Object.entries(entries)) {
       if (!/^\d+$/.test(key)) continue

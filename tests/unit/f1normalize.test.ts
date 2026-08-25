@@ -562,6 +562,30 @@ describe('pickReferenceDriver / debugTrackTraceInfo', () => {
     expect(info.referenceDriver).toBe(4)
     expect(info.openTraceLength).toBe(4)
   })
+
+  it('finds a reference driver who only appears after a long empty-track opening (live diagnostics regression)', () => {
+    // Reproduces a real reported case: 10,850 raw position points had
+    // accumulated over 2-3 minutes of live viewing with "reference car: none
+    // yet" — every car reported OffTrack (grid/formation/pit queue) for far
+    // longer than the old fixed 600-point search window covered, so the
+    // search gave up permanently even as thousands more points kept arriving.
+    const emptyTrackPoints: F1StreamPoint[] = Array.from({ length: 800 }, (_, i) => ({
+      t: i,
+      d: { Position: { '0': { Entries: { '1': { Status: 'OffTrack', X: 0, Y: 0 } } } } }
+    }))
+    const goesGreen: F1StreamPoint[] = Array.from({ length: 5 }, (_, i) => ({
+      t: 800 + i,
+      d: {
+        Position: {
+          '0': { Entries: { '1': { Status: 'OnTrack', X: i * 200, Y: 5 } } }
+        }
+      }
+    }))
+    const points = [...emptyTrackPoints, ...goesGreen]
+
+    expect(pickReferenceDriver(points)).toBe(1)
+    expect(debugTrackTraceInfo(points).referenceDriver).toBe(1)
+  })
 })
 
 describe('buildClosedTrackPath', () => {
