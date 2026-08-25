@@ -770,6 +770,21 @@ const MIN_CLOSED_LAP_UNITS = 30_000
  * lap too — at Zandvoort the search window holds about seven of them — so the
  * map drew seven slightly different racing lines on top of each other and the
  * circuit came out as a thick scribble rather than a line.
+ *
+ * Among every (i, j) pair that clears the minimum-lap-distance and proximity
+ * checks, the TIGHTEST geometric match wins — not the first one found in scan
+ * order. A real F1 pit lane commonly runs close to (and shares a chunk of) the
+ * main straight; if the reference car pits early, that short pit-lane loop can
+ * itself satisfy both checks well before the true full-lap closure is
+ * reached, and returning-on-first-match locked onto it: a "closed" loop that
+ * was really just the pit lane, with the rest of the circuit — wherever every
+ * other car actually was — never part of the trace, rendering as a cluster of
+ * cars floating in space next to a real-looking but incomplete outline. The
+ * true start/finish revisit is the SAME physical point crossed twice, so it
+ * should match far more precisely than a merely-nearby but genuinely
+ * different piece of track; picking the tightest match across the whole
+ * search window (capped at `TRACK_PATH_MAX_POINTS`, so still a bounded scan)
+ * is a general fix that doesn't depend on detecting "pit lane" specifically.
  */
 export function buildClosedTrackPath(
   points: F1StreamPoint[],
@@ -796,15 +811,18 @@ export function buildClosedTrackPath(
   const cumulative = [0]
   for (let k = 1; k < path.length; k++) cumulative.push(cumulative[k - 1] + steps[k - 1])
 
+  let best: { i: number; j: number; distance: number } | null = null
   for (let i = 2; i < path.length; i++) {
     for (let j = 0; j < i; j++) {
       if (cumulative[i] - cumulative[j] < MIN_CLOSED_LAP_UNITS) continue
-      if (Math.hypot(path[i].x - path[j].x, path[i].y - path[j].y) <= closeDistance) {
-        return [...path.slice(j, i + 1), path[j]]
+      const distance = Math.hypot(path[i].x - path[j].x, path[i].y - path[j].y)
+      if (distance <= closeDistance && (!best || distance < best.distance)) {
+        best = { i, j, distance }
       }
     }
   }
-  return null
+  if (!best) return null
+  return [...path.slice(best.j, best.i + 1), path[best.j]]
 }
 
 export interface PositionCoordinates {

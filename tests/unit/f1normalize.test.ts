@@ -660,7 +660,11 @@ describe('buildClosedTrackPath', () => {
     const closed = buildClosedTrackPath(sparse)
     expect(closed).not.toBeNull()
     if (!closed) throw new Error('Expected a closed track path.')
-    expect(closed.length).toBeLessThanOrEqual(25)
+    // The exact revisit (step 24, distance 0 from step 0) is the tightest
+    // possible match, and now correctly preferred over the merely-close
+    // step-23 candidate (~15° short, still within tolerance) the old
+    // first-match-wins search used to settle for.
+    expect(closed.length).toBeLessThanOrEqual(26)
   })
 
   it('closes the lap when tracking starts mid-lap, not at the start/finish line', () => {
@@ -676,6 +680,45 @@ describe('buildClosedTrackPath', () => {
     // Closes back to the FIRST tracked point (step 15), not step 0.
     expect(closed[0]).toEqual(closed.at(-1))
     expect(closed.length).toBeGreaterThan(50)
+  })
+
+  it('prefers the true full-lap closure over an earlier, merely-nearby false match (e.g. a pit lane loop)', () => {
+    // A real pit lane commonly runs close to (and shares a chunk of) the main
+    // straight. If the reference car pits early, that short loop back near
+    // the start can itself clear both the distance and proximity checks well
+    // before the true lap closes — and used to win outright, since the old
+    // search returned the FIRST valid match instead of the best one.
+    // Offset well away from the origin — (0,0) is the feed's own "no GPS fix"
+    // sentinel and gets filtered out by isOnTrackEntry, which would silently
+    // (and wrongly, for this test) drop the very start/finish point.
+    const ox = 50_000
+    const oy = 50_000
+    const xy = (x: number, y: number) => ({ x: ox + x, y: oy + y })
+    const pitLaneDetourThenTrueLap: { x: number; y: number }[] = [
+      xy(0, 0), // start
+      xy(10_000, 0),
+      xy(20_000, 0),
+      xy(20_000, 3_000),
+      xy(10_000, 3_000),
+      xy(300, 100), // "pit exit" — close to start (distance ~316) but NOT exact
+      xy(5_000, 5_000),
+      xy(10_000, 8_000),
+      xy(5_000, 10_000),
+      xy(0, 0) // true start/finish revisit — exact (distance 0)
+    ]
+    const points: F1StreamPoint[] = pitLaneDetourThenTrueLap.map((p, i) => ({
+      t: i,
+      d: { Position: { '0': { Entries: { '1': { X: p.x, Y: p.y } } } } }
+    }))
+
+    const closed = buildClosedTrackPath(points)
+    expect(closed).not.toBeNull()
+    if (!closed) throw new Error('Expected a closed track path.')
+    // Must include the WHOLE traced route (index 0 through the final exact
+    // revisit), not stop early at the loose pit-lane-adjacent match. +1: the
+    // closing point is appended again to eliminate the visible seam.
+    expect(closed).toHaveLength(pitLaneDetourThenTrueLap.length + 1)
+    expect(closed.at(-1)).toEqual(closed[0])
   })
 })
 

@@ -120,8 +120,15 @@ const MIN_OPEN_TRACE_POINTS = 30
  * point (or never close at all) — either way, a wrong shape could get cached
  * and then permanently reused (`trackPathClosed` blocks recompute) even
  * after the closure algorithm itself was fixed to check every earlier point.
+ *
+ * Bumped 2 -> 3: `buildClosedTrackPath` used to return the FIRST valid
+ * closure found (smallest search index), not the best one. A pit lane
+ * commonly runs close to the main straight, so a reference car that pitted
+ * early could close on that short loop before the true lap ever did — and a
+ * wrong, incomplete outline (cars racing on the untraced rest of the
+ * circuit rendering outside it) got cached exactly like a correct one.
  */
-export const TRACK_PATH_CACHE_SCHEMA_VERSION = 2
+export const TRACK_PATH_CACHE_SCHEMA_VERSION = 3
 
 /**
  * Renderer-side retention for CarData/Position, matching the socket's own cap
