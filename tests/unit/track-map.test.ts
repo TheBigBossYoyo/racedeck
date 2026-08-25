@@ -8,10 +8,20 @@ import { DEFAULT_THEME } from '@renderer/core/engines/ThemeEngine'
 import { useSessionStore } from '@renderer/store/sessionStore'
 import { useSettingsStore } from '@renderer/store/settingsStore'
 
-const markerCalls = vi.hoisted((): Array<{ animate: boolean; driverNumber: number; durationMs: number }> => [])
+const markerCalls = vi.hoisted(
+  (): Array<{ animate: boolean; driverNumber: number; durationMs: number }> => []
+)
 
 vi.mock('@renderer/widgets/trackMap/TrackMapDriverMarker', () => ({
-  TrackMapDriverMarker: ({ animate, dot, durationMs }: { animate: boolean; dot: { number: number }; durationMs: number }) => {
+  TrackMapDriverMarker: ({
+    animate,
+    dot,
+    durationMs
+  }: {
+    animate: boolean
+    dot: { number: number }
+    durationMs: number
+  }) => {
     markerCalls.push({ animate, driverNumber: dot.number, durationMs })
     return createElement('g', { 'data-testid': `marker-${dot.number}` })
   }
@@ -92,7 +102,11 @@ function makePosition(position: Partial<PositionSample>): PositionSample {
   }
 }
 
-function makeSnapshot(options: { live: boolean; positions: readonly PositionSample[] }): RaceSnapshot {
+function makeSnapshot(options: {
+  live: boolean
+  positions: readonly PositionSample[]
+  trackPath?: readonly { x: number; y: number }[]
+}): RaceSnapshot {
   const availability = emptyAvailability()
   availability.timing = true
   availability.laps = true
@@ -111,8 +125,10 @@ function makeSnapshot(options: { live: boolean; positions: readonly PositionSamp
     weatherHistory: [],
     positions: [...options.positions],
     trackPath: [
-      { x: 0, y: 0 },
-      { x: 1_000, y: 1_000 }
+      ...(options.trackPath ?? [
+        { x: 0, y: 0 },
+        { x: 1_000, y: 1_000 }
+      ])
     ],
     availability,
     clock: 0,
@@ -189,5 +205,20 @@ describe('TrackMap interpolation', () => {
     renderTrackMap(snapshot, false, true)
 
     expect(markerCalls).toEqual([{ animate: false, driverNumber: 4, durationMs: 900 }])
+  })
+
+  it('renders no driver dots in coordinate mode until a real track outline exists', () => {
+    // Without a closed outline, "bounds" would just be wherever the field
+    // currently is (e.g. bunched on a straight) — plotting dots into that box
+    // is a meaningless smear with no track to read it against.
+    const snapshot = makeSnapshot({
+      live: true,
+      positions: [makePosition({ x: 100, y: 200 })],
+      trackPath: []
+    })
+
+    renderTrackMap(snapshot, false, false)
+
+    expect(markerCalls).toEqual([])
   })
 })

@@ -5,6 +5,7 @@ import { Sidebar } from '@renderer/components/shell/Sidebar'
 import { StatusBar } from '@renderer/components/shell/StatusBar'
 import { VideoStatusBanner } from '@renderer/components/shell/VideoStatusBanner'
 import { LiveConnectionBanner } from '@renderer/components/shell/LiveConnectionBanner'
+import { RadioNotificationToast } from '@renderer/components/shell/RadioNotificationToast'
 import { DashboardView } from '@renderer/components/DashboardView'
 import { useAppStore } from '@renderer/store/appStore'
 import { useSettingsStore } from '@renderer/store/settingsStore'
@@ -95,6 +96,7 @@ export function App() {
         <div className="relative flex min-h-0 flex-1">
           <VideoStatusBanner />
           <LiveConnectionBanner />
+          <RadioNotificationToast />
           <Sidebar />
           <main className="relative flex min-w-0 flex-1 flex-col overflow-hidden">
             {(route === 'dashboard' || route === 'strategy') && <DashboardView />}

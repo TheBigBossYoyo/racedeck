@@ -98,11 +98,20 @@ const ENRICHMENT_NOTIFY_MIN_MS = 300 // bound snapshot fan-out while chunks stre
 const TRACK_PATH_CACHE_MAX = 700
 
 /**
- * Bump when the shape of a cached track-path entry changes. Included in the
- * cache key so a stale-shaped entry from an older RaceDeck version is treated
- * as a miss (rebuilt from live position data) rather than silently misread.
+ * Bump when the shape of a cached track-path entry changes, OR when the
+ * closure algorithm that PRODUCES it changes — a path cached by an older,
+ * buggier closer is a stale-shaped entry too, even though it still parses.
+ * Included in the cache key so it's treated as a miss (rebuilt from live
+ * position data with the current algorithm) rather than silently misread.
+ *
+ * Bumped 1 -> 2: `buildClosedTrackPath` used to close only against `path[0]`
+ * (wherever tracking happened to start), so anyone connecting mid-session
+ * could get a false "closed" match on a short, wrong arc near that arbitrary
+ * point (or never close at all) — either way, a wrong shape could get cached
+ * and then permanently reused (`trackPathClosed` blocks recompute) even
+ * after the closure algorithm itself was fixed to check every earlier point.
  */
-export const TRACK_PATH_CACHE_SCHEMA_VERSION = 1
+export const TRACK_PATH_CACHE_SCHEMA_VERSION = 2
 
 /**
  * Renderer-side retention for CarData/Position, matching the socket's own cap

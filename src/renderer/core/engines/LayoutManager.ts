@@ -264,10 +264,13 @@ export const LAYOUT_PRESETS: Record<LayoutId, LayoutPreset> = {
       P('race-control', 8, 17, 4, 9),
       P('race-story', 0, 26, 4, 10, 3, 7),
       P('gap-chart', 4, 26, 4, 10),
-      P('tyre-strategy', 8, 26, 4, 10),
-      P('weather', 0, 36, 3, 5),
-      P('alerts', 3, 36, 4, 5),
-      P('sync', 7, 36, 5, 5)
+      // Directly below Race Control, same column — radio is one of the most
+      // important signals in a race, not something to go hunting for.
+      P('team-radio', 8, 26, 4, 9, 3, 6),
+      P('tyre-strategy', 8, 35, 4, 10),
+      P('weather', 0, 45, 3, 5),
+      P('alerts', 3, 45, 4, 5),
+      P('sync', 7, 45, 5, 5)
     ]
   },
   'driver-focus': {

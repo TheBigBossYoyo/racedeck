@@ -1,8 +1,10 @@
-import { renderHook } from '@testing-library/react'
-import { describe, expect, it } from 'vitest'
+import { act, renderHook } from '@testing-library/react'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { useLastGood } from '../../src/renderer/lib/useLastGood'
 
 describe('useLastGood', () => {
+  afterEach(() => vi.useRealTimers())
+
   it('passes through non-null values unchanged', () => {
     const { result, rerender } = renderHook(({ value }) => useLastGood(value), {
       initialProps: { value: 1 as number | null }
@@ -12,43 +14,53 @@ describe('useLastGood', () => {
     expect(result.current).toBe(2)
   })
 
-  it('holds the last good value across up to graceTicks consecutive nulls', () => {
-    const { result, rerender } = renderHook(({ value }) => useLastGood(value, 3), {
+  it('holds the last good value while inside the grace window, regardless of tick count', () => {
+    vi.useFakeTimers()
+    const { result, rerender } = renderHook(({ value }) => useLastGood(value, 5_000), {
       initialProps: { value: 'a' as string | null }
     })
     expect(result.current).toBe('a')
 
-    rerender({ value: null })
-    expect(result.current).toBe('a')
-    rerender({ value: null })
-    expect(result.current).toBe('a')
-    rerender({ value: null })
+    // Many rapid null re-renders within the grace window — a tick-count budget
+    // would have exhausted after a handful; time-based must not.
+    for (let i = 0; i < 20; i++) {
+      act(() => vi.advanceTimersByTime(100))
+      rerender({ value: null })
+    }
     expect(result.current).toBe('a')
   })
 
-  it('falls through to null once nulls exceed graceTicks', () => {
-    const { result, rerender } = renderHook(({ value }) => useLastGood(value, 2), {
+  it('falls through to null once the grace window elapses with no fresh value', () => {
+    vi.useFakeTimers()
+    const { result, rerender } = renderHook(({ value }) => useLastGood(value, 2_000), {
       initialProps: { value: 'a' as string | null }
     })
 
     rerender({ value: null })
+    act(() => vi.advanceTimersByTime(1_999))
     rerender({ value: null })
     expect(result.current).toBe('a')
+
+    act(() => vi.advanceTimersByTime(2))
     rerender({ value: null })
     expect(result.current).toBeNull()
   })
 
-  it('resets the miss counter once a fresh value arrives', () => {
-    const { result, rerender } = renderHook(({ value }) => useLastGood(value, 1), {
+  it('resets the grace window once a fresh value arrives', () => {
+    vi.useFakeTimers()
+    const { result, rerender } = renderHook(({ value }) => useLastGood(value, 1_000), {
       initialProps: { value: 'a' as string | null }
     })
 
-    rerender({ value: null })
-    expect(result.current).toBe('a')
+    act(() => vi.advanceTimersByTime(900))
     rerender({ value: 'b' })
     expect(result.current).toBe('b')
+
+    act(() => vi.advanceTimersByTime(900))
     rerender({ value: null })
     expect(result.current).toBe('b')
+
+    act(() => vi.advanceTimersByTime(200))
     rerender({ value: null })
     expect(result.current).toBeNull()
   })

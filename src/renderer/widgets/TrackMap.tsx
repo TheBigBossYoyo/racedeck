@@ -115,30 +115,38 @@ export function TrackMap() {
             .map((point) => `${point.x},${point.y}`)
             .join(' ')
         }
-        const retiredDrivers = new Set(
-          snapshot.timing
-            .filter((t) => t.retired || t.status === 'RETIRED' || t.status === 'DNF')
-            .map((t) => t.driverNumber)
-        )
-        const inPitDrivers = new Set(
-          snapshot.timing.filter((t) => t.inPit || t.status === 'IN_PIT').map((t) => t.driverNumber)
-        )
-        const fastestDriver =
-          snapshot.timing.find((entry) => entry.isFastestLap)?.driverNumber ?? null
+        // Without a real outline, `currentBounds` is just wherever the field
+        // happens to be THIS frame (e.g. strung out on one straight) — plotting
+        // dots into that box draws a meaningless smear with no track to read it
+        // against. Wait for a real path before showing any car at all.
+        if (path) {
+          const retiredDrivers = new Set(
+            snapshot.timing
+              .filter((t) => t.retired || t.status === 'RETIRED' || t.status === 'DNF')
+              .map((t) => t.driverNumber)
+          )
+          const inPitDrivers = new Set(
+            snapshot.timing
+              .filter((t) => t.inPit || t.status === 'IN_PIT')
+              .map((t) => t.driverNumber)
+          )
+          const fastestDriver =
+            snapshot.timing.find((entry) => entry.isFastestLap)?.driverNumber ?? null
 
-        for (const p of snapshot.positions) {
-          if (p.x == null || p.y == null) continue
-          const normPt = normalizePoint({ x: p.x, y: p.y }, currentBounds, config)
-          driverDots.push({
-            number: p.driverNumber,
-            code: meta.get(p.driverNumber)?.code ?? String(p.driverNumber),
-            color: hexColor(meta.get(p.driverNumber)?.teamColour ?? null),
-            position: p.position,
-            isRetired: retiredDrivers.has(p.driverNumber),
-            isInPit: inPitDrivers.has(p.driverNumber),
-            isFastestLap: fastestDriver === p.driverNumber,
-            ...normPt
-          })
+          for (const p of snapshot.positions) {
+            if (p.x == null || p.y == null) continue
+            const normPt = normalizePoint({ x: p.x, y: p.y }, currentBounds, config)
+            driverDots.push({
+              number: p.driverNumber,
+              code: meta.get(p.driverNumber)?.code ?? String(p.driverNumber),
+              color: hexColor(meta.get(p.driverNumber)?.teamColour ?? null),
+              position: p.position,
+              isRetired: retiredDrivers.has(p.driverNumber),
+              isInPit: inPitDrivers.has(p.driverNumber),
+              isFastestLap: fastestDriver === p.driverNumber,
+              ...normPt
+            })
+          }
         }
       }
     } else {

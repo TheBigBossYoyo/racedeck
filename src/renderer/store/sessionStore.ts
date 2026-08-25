@@ -12,6 +12,7 @@ import { useAlertStore } from './alertStore'
 import { useSettingsStore } from './settingsStore'
 import { useRaceStoryStore } from './raceStoryStore'
 import { useEngineerNotesStore } from './engineerNotesStore'
+import { useRadioNotifyStore } from './radioNotifyStore'
 import { useAnnotationsStore } from './annotationsStore'
 import { useProfileStore } from './profileStore'
 import { syncMath } from '@renderer/core/engines/SessionSyncEngine'
@@ -322,6 +323,7 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
       useAlertStore.getState().ingest(snapshot)
       useRaceStoryStore.getState().ingest(snapshot)
       useEngineerNotesStore.getState().ingest(snapshot)
+      useRadioNotifyStore.getState().ingest(snapshot)
     } catch (e) {
       set({ error: (e as Error).message })
     }
