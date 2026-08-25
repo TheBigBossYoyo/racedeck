@@ -126,6 +126,27 @@ function PhaseChip({
   )
 }
 
+/**
+ * Kinds shown as dots on the compact global scrubber. `pit-stop` and `radio`
+ * are deliberately excluded here — one per pit stop and one per radio clip
+ * means 40-80+ markers over a full race, packed into a strip a few pixels
+ * tall until it reads as an undifferentiated smear rather than a timeline
+ * (round-3 live-session feedback: "remove all the little dots" /
+ * "completely incomprehensible ... everything jammed on itself"). Both stay
+ * fully navigable elsewhere — Team Radio's own clip list, the pit
+ * history/tyre strategy views — and both remain in the underlying
+ * `RaceBookmark[]` data for the command palette and debrief export, which
+ * still benefit from the complete set.
+ */
+const SCRUBBER_BOOKMARK_KINDS: ReadonlySet<RaceBookmarkKind> = new Set([
+  'safety-car',
+  'vsc',
+  'red-flag',
+  'lead-change',
+  'penalty',
+  'fastest-lap'
+])
+
 const BOOKMARK_META: Record<RaceBookmarkKind, { color: string; ring?: boolean }> = {
   start: { color: 'transparent' }, // drawn separately by the existing "Lights out" flag marker
   'safety-car': { color: 'rgb(var(--warn))' },
@@ -212,6 +233,7 @@ function PhaseStrip({
           seeks data + TOD video together via the existing sync engine. */}
       {bookmarks.map((bookmark, i) => {
         if (bookmark.kind === 'start') return null // already drawn as the flag marker above
+        if (!SCRUBBER_BOOKMARK_KINDS.has(bookmark.kind)) return null
         const meta = BOOKMARK_META[bookmark.kind]
         return (
           <button

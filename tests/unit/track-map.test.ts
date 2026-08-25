@@ -207,10 +207,10 @@ describe('TrackMap interpolation', () => {
     expect(markerCalls).toEqual([{ animate: false, driverNumber: 4, durationMs: 900 }])
   })
 
-  it('renders no driver dots in coordinate mode until a real track outline exists', () => {
-    // Without a closed outline, "bounds" would just be wherever the field
-    // currently is (e.g. bunched on a straight) — plotting dots into that box
-    // is a meaningless smear with no track to read it against.
+  it('still renders driver dots before a closed track outline exists', () => {
+    // Live positions are real even before the outline traces — hiding the
+    // whole field for however long closure takes is worse than a map with
+    // no track shape yet: it looks like the map broke, not like it's working.
     const snapshot = makeSnapshot({
       live: true,
       positions: [makePosition({ x: 100, y: 200 })],
@@ -219,6 +219,6 @@ describe('TrackMap interpolation', () => {
 
     renderTrackMap(snapshot, false, false)
 
-    expect(markerCalls).toEqual([])
+    expect(markerCalls).toEqual([{ animate: true, driverNumber: 4, durationMs: 900 }])
   })
 })
