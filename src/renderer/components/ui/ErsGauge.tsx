@@ -1,4 +1,13 @@
-import { BatteryCharging, Battery, TrendingDown, TrendingUp, Minus, Zap, Gauge } from 'lucide-react'
+import {
+  BatteryCharging,
+  Battery,
+  TrendingDown,
+  TrendingUp,
+  Minus,
+  Zap,
+  Gauge,
+  Lock
+} from 'lucide-react'
 import type { EnergyMode } from '@shared/models'
 import { cn, formatStaleness } from '@renderer/lib/utils'
 
@@ -131,8 +140,10 @@ export function ErsBar({
       </span>
       {deploymentLimited && (
         // The bare percentage cannot explain itself; this says WHY it is flat.
-        <span className="rounded bg-warn/10 px-1 py-px text-[8px] font-bold tracking-wide text-warn">
-          LIM
+        // Given its own icon (unlike the plain-text mode badges below) so it
+        // reads as a separate constraint, not just another deploy mode.
+        <span className="flex items-center gap-0.5 rounded border border-warn/25 bg-warn/10 px-1 py-px text-[8px] font-bold tracking-wide text-warn">
+          <Lock className="h-2 w-2" /> LIM
         </span>
       )}
       {stale && (

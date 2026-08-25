@@ -347,12 +347,13 @@ function resolveGapEstimates(
     let aboveIndex = index - 1
     while (aboveIndex >= 0 && !estimates.has(sorted[aboveIndex].driverNumber)) aboveIndex--
     let belowIndex = index + 1
-    while (belowIndex < sorted.length && !estimates.has(sorted[belowIndex].driverNumber)) belowIndex++
+    while (belowIndex < sorted.length && !estimates.has(sorted[belowIndex].driverNumber))
+      belowIndex++
 
     const above = aboveIndex >= 0 ? sorted[aboveIndex] : null
     const below = belowIndex < sorted.length ? sorted[belowIndex] : null
-    const aboveEstimate = above != null ? estimates.get(above.driverNumber) ?? null : null
-    const belowEstimate = below != null ? estimates.get(below.driverNumber) ?? null : null
+    const aboveEstimate = above != null ? (estimates.get(above.driverNumber) ?? null) : null
+    const belowEstimate = below != null ? (estimates.get(below.driverNumber) ?? null) : null
 
     let margin: number
     let quality = UNKNOWN_GAP_QUALITY
@@ -405,15 +406,15 @@ export const WinProbabilityEngine = {
     let beta = BASE_BETA + BETA_PER_LAP * Math.max(0, lapsRemaining ?? 12)
     beta *= 1.2 - 0.2 * raceProgress
     beta = Math.min(MAX_GREEN_BETA, beta)
-    if (snapshot.trackStatus === 'SAFETY_CAR' || snapshot.trackStatus === 'VSC') beta *= SC_BETA_MULT
+    if (snapshot.trackStatus === 'SAFETY_CAR' || snapshot.trackStatus === 'VSC')
+      beta *= SC_BETA_MULT
     if (snapshot.weather?.rainfall) beta *= WET_BETA_MULT
     return clamp(beta, 0.35, MAX_BETA)
   },
 
   /** Full win/podium/points model for the current snapshot. */
   compute(snapshot: RaceSnapshot): WinProbabilityModel {
-    const neutralized =
-      snapshot.trackStatus === 'SAFETY_CAR' || snapshot.trackStatus === 'VSC'
+    const neutralized = snapshot.trackStatus === 'SAFETY_CAR' || snapshot.trackStatus === 'VSC'
     const lapsRemaining =
       snapshot.totalLaps != null && snapshot.currentLap != null
         ? Math.max(0, snapshot.totalLaps - snapshot.currentLap)
@@ -467,7 +468,9 @@ export const WinProbabilityEngine = {
     }
     const runners = snapshot.timing
       .filter((entry) => !isOut(entry.status) && !entry.retired)
-      .sort((a, b) => (a.position ?? Number.MAX_SAFE_INTEGER) - (b.position ?? Number.MAX_SAFE_INTEGER))
+      .sort(
+        (a, b) => (a.position ?? Number.MAX_SAFE_INTEGER) - (b.position ?? Number.MAX_SAFE_INTEGER)
+      )
 
     if (runners.length === 0) {
       return { ...base, reason: 'No classified runners to project yet.' }
@@ -481,7 +484,8 @@ export const WinProbabilityEngine = {
 
     const provisional: Cand[] = runners.map((entry) => {
       const gapEstimate =
-        gapEstimates.get(entry.driverNumber) ?? ({ margin: 0, quality: UNKNOWN_GAP_QUALITY, source: 'position' } as const)
+        gapEstimates.get(entry.driverNumber) ??
+        ({ margin: 0, quality: UNKNOWN_GAP_QUALITY, source: 'position' } as const)
       const pitCycle = pitCycleField.byDriver.get(entry.driverNumber)
       const closeTraffic = classifyCloseTraffic(snapshot, entry)
       const pace = recentPaceFor(snapshot, entry)
@@ -490,20 +494,34 @@ export const WinProbabilityEngine = {
         leaderPace != null && pace != null ? 1 - Math.exp(-clamp(samples, 0, 8) / 2.4) : 0
       const paceTrafficPenalty = closeTraffic.isCloseTraffic ? 0.18 : 1
       const paceConfidence =
-        rawPaceConfidence * (0.55 + 0.45 * progress) * (0.25 + 0.75 * gapEstimate.quality) * (neutralized ? 0.8 : 1) * paceTrafficPenalty
+        rawPaceConfidence *
+        (0.55 + 0.45 * progress) *
+        (0.25 + 0.75 * gapEstimate.quality) *
+        (neutralized ? 0.8 : 1) *
+        paceTrafficPenalty
       const rawPaceClosePerLap =
         leaderPace != null && pace != null
           ? clamp(leaderPace - pace, -MAX_CLOSE_RATE, MAX_CLOSE_RATE)
           : 0
-      const paceClosePerLap = closeTraffic.isCloseTraffic ? rawPaceClosePerLap * 0.25 : rawPaceClosePerLap
+      // Traffic uncertainty is already expressed once via `paceTrafficPenalty`
+      // above (in `paceConfidence`). Also discounting the magnitude here would
+      // double-count the same masking — 0.18 x 0.25 compounds to a 95.5% wipeout
+      // of a traffic-masked driver's real pace advantage before it ever reaches
+      // the margin calculation below, which is precisely backwards: a driver who
+      // is genuinely faster but stuck in traffic should keep most of that
+      // advantage, just reported with lower confidence.
+      const paceClosePerLap = rawPaceClosePerLap
       const paceEffect = -paceClosePerLap * projectionLaps * paceConfidence
 
       const compound = tyreCompound(entry)
       const ageLaps = stintAgeLaps(entry)
       const tyreScore = tyreStateScore(compound, ageLaps)
-      const rawTyreConfidence = tyreScore != null ? (compound != null && ageLaps != null ? 1 : 0.55) : 0
+      const rawTyreConfidence =
+        tyreScore != null ? (compound != null && ageLaps != null ? 1 : 0.55) : 0
       const tyreConfidence =
-        rawTyreConfidence * (0.45 + 0.55 * progress) * (0.55 + 0.45 * (1 - Math.min(1, rawPaceConfidence)))
+        rawTyreConfidence *
+        (0.45 + 0.55 * progress) *
+        (0.55 + 0.45 * (1 - Math.min(1, rawPaceConfidence)))
       const tyreDeltaPerLap =
         leaderTyreScore != null && tyreScore != null
           ? clamp(tyreScore - leaderTyreScore, -0.45, 0.45)
@@ -537,7 +555,12 @@ export const WinProbabilityEngine = {
         tyreDeltaPerLap,
         tyreConfidence,
         penaltySeconds: penalty,
-        margin: gapEstimate.margin + (pitCycle?.relativeAdjustmentSec ?? 0) + paceEffect + tyreEffect + penalty,
+        margin:
+          gapEstimate.margin +
+          (pitCycle?.relativeAdjustmentSec ?? 0) +
+          paceEffect +
+          tyreEffect +
+          penalty,
         confidence
       }
     })
@@ -550,7 +573,8 @@ export const WinProbabilityEngine = {
 
     const meta = new Map(snapshot.drivers.map((d) => [d.number, d]))
     const fieldSize = field.length
-    const avgGapQuality = average(field.map((candidate) => candidate.gapQuality)) ?? UNKNOWN_GAP_QUALITY
+    const avgGapQuality =
+      average(field.map((candidate) => candidate.gapQuality)) ?? UNKNOWN_GAP_QUALITY
     const avgPaceConfidence = average(field.map((candidate) => candidate.paceConfidence)) ?? 0
     const avgTyreConfidence = average(field.map((candidate) => candidate.tyreConfidence)) ?? 0
     const modelConfidence = clamp(
@@ -614,7 +638,8 @@ export const WinProbabilityEngine = {
       const pointsPct = Math.min(100, Math.max(r.points * 100, podiumPct))
       const factors: string[] = []
 
-      if (r.cand.penaltySeconds > 0) factors.push(`+${formatPenalty(r.cand.penaltySeconds)}s penalty`)
+      if (r.cand.penaltySeconds > 0)
+        factors.push(`+${formatPenalty(r.cand.penaltySeconds)}s penalty`)
       if (r.cand.pitCycleFactor != null) factors.push(r.cand.pitCycleFactor)
       if (pos === 1) factors.push('Track leader')
 
@@ -628,7 +653,9 @@ export const WinProbabilityEngine = {
         const compound = tyreCompound(r.cand.entry)
         const age = stintAgeLaps(r.cand.entry)
         const ageText = age != null ? ` ${age}L` : ''
-        factors.push(`${compoundLabel(compound)}${ageText} tyre ${r.cand.tyreDeltaPerLap > 0 ? 'edge' : 'drag'}`)
+        factors.push(
+          `${compoundLabel(compound)}${ageText} tyre ${r.cand.tyreDeltaPerLap > 0 ? 'edge' : 'drag'}`
+        )
       }
 
       if (r.cand.gapSource !== 'exact') {
@@ -677,8 +704,7 @@ export function winProbabilitySummary(model: WinProbabilityModel, topN = 6): str
     `WIN PROBABILITY MODEL (estimate; ${
       `${model.dataQuality} confidence ${model.confidencePct.toFixed(0)}%${
         model.lapsRemaining != null ? `, ${model.lapsRemaining} laps left` : ', laps unknown'
-      }` +
-      `${model.neutralized ? ', track neutralized' : ''}`
+      }` + `${model.neutralized ? ', track neutralized' : ''}`
     }):`
   )
   for (const c of model.chances.slice(0, topN)) {

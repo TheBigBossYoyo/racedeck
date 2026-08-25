@@ -249,6 +249,11 @@ export function TrackMap() {
           ) : (
             <Badge tone="good">Live positions</Badge>
           )}
+          {hasCoordinatePositions && !geometry.path && (
+            <span title="No car has completed a full lap since connecting yet, and no cached outline exists for this race weekend — positions are real, the outline just isn't traced yet.">
+              <Badge tone="neutral">Tracing outline…</Badge>
+            </span>
+          )}
           {stale && (
             <span title="Position feed has stopped delivering new data">
               <Badge tone="warn">{stale}</Badge>
@@ -271,7 +276,7 @@ export function TrackMap() {
               strokeLinejoin="round"
               strokeLinecap="round"
             />
-          ) : (
+          ) : hasCoordinatePositions ? null : (
             <>
               {/* Circuit outline */}
               <ellipse

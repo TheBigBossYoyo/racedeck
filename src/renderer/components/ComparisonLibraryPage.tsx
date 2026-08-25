@@ -56,6 +56,10 @@ export function ComparisonLibraryPage() {
               Save derived, source-labelled summaries and compare pit loss, degradation, top speed,
               team pace and weather across events.
             </p>
+            <p className="mt-1 text-2xs text-fg-subtle">
+              Save a session below, then check two or more saved rows to compare them side by side —
+              it only becomes useful once you have more than one session saved.
+            </p>
           </div>
           <Button
             variant="outline"

@@ -31,11 +31,28 @@
  * The result self-limits for the same reason the real system does — the driver
  * runs out of allowance — rather than because a constant pulled it back.
  *
- * Energy model (simplified 2026 ~50%-electric PU):
- *  - DEPLOY zone  (throttle > 75% AND speed > 200 km/h): drains ~1.8 %/s.
- *  - BOOST zone (Straight Mode + throttle > 85% + speed > 200): drains faster.
- *  - HARVEST/brake (brake > 20% AND throttle < 20%): charges ~1.4 %/s.
- *  - HARVEST/lift  (throttle < 20% AND speed > 50 km/h, no brake): charges ~0.4 %/s.
+ * Energy model, calibrated against the real 2026 FIA Power Unit Technical
+ * Regulations (not invented rates) — see the constants section below for the
+ * exact figures and sourcing:
+ *  - DEPLOY zone  (throttle > 75% AND speed > 200 km/h): drains at the rate a
+ *    350kW MGU-K implies against the ~4MJ Energy Store (a full-power burst
+ *    empties the store in ~11.4s, matching the regulation's own "4MJ burst /
+ *    ~11.5s" figure — a useful internal cross-check that the conversion is
+ *    right).
+ *  - Above ~340-345 km/h, deployment tapers to zero: the 2026 regs cut
+ *    electrical assist entirely above that speed, so top-speed running on a
+ *    long straight (Monza, Spa) is combustion-only — a genuinely new
+ *    behaviour this model has no equivalent of pre-2026.
+ *  - BOOST zone (Straight Mode + throttle > 85% + speed > 200): drains faster
+ *    (manual-override multiplier — not independently sourced, kept as a
+ *    documented estimate).
+ *  - HARVEST/brake, HARVEST/lift: MGU-H is removed for 2026, so ALL recovery
+ *    now comes from the MGU-K alone. Real per-lap recovery capability jumped
+ *    to up to 8.5MJ (circuit-dependent, FIA-set ~5-9MJ), a ~4x increase over
+ *    the pre-2026 baseline — these rates are scaled up proportionally from
+ *    that ratio (see the constants section; the exact recovery POWER in kW
+ *    isn't published, so this is a documented proportional estimate, not a
+ *    directly-sourced rate the way the deploy drain is).
  *  - Otherwise (BALANCED): very mild trickle.
  *  - SoC is clamped [0, 100]; both budgets are clamped at 0.
  */
@@ -135,10 +152,41 @@ const SAMPLES_FOR_HIGH_CONFIDENCE = 120
 const MAX_SOC = 100
 const MIN_SOC = 0
 
-/** Energy flow rates in %/s. */
-const DRAIN_DEPLOY_PER_S = 1.8
+/**
+ * Energy flow rates in %/s, where 100% SoC represents the Energy Store's
+ * usable ~4MJ capacity (the regulation's own "delta State of Charge" cap per
+ * lap).
+ *
+ * DRAIN_DEPLOY_PER_S is derived directly from the 2026 MGU-K's real 350kW
+ * output against that 4MJ store: 350kW = 350 kJ/s = 8.75% of a 4000kJ store
+ * per second. Cross-check: at that rate a full-power burst empties the whole
+ * store in 100/8.75 ≈ 11.4s, matching the regulation's own independently-
+ * reported "4MJ burst ≈ 11.5s of full ERS-K power" figure almost exactly —
+ * confirms the %-of-store conversion is physically consistent, not just a
+ * plausible-looking number.
+ */
+const DRAIN_DEPLOY_PER_S = 8.75
 /** Extra factor on drain during manual Boost deployment. */
 const DRAIN_BOOST_MULTIPLIER = 1.6
+
+/**
+ * Speed window (km/h) over which 2026's electrical deployment cuts out
+ * entirely — real regulatory behaviour, not present pre-2026: above this
+ * range the PU is running combustion-only, so DEPLOY/BOOST cannot be active
+ * no matter how much budget or SoC remains. Tapers linearly across the
+ * window rather than a hard cliff, since the regulation itself describes a
+ * formula-based falloff, not an instant cutoff.
+ */
+const DEPLOY_TAPER_START_KMH = 340
+const DEPLOY_CUTOFF_KMH = 345
+
+/** Fraction of full deployment still available at `speedKmh` (1 at/below the taper start, 0 at/above the cutoff). */
+function deployTaperFraction(speedKmh: number): number {
+  if (speedKmh <= DEPLOY_TAPER_START_KMH) return 1
+  if (speedKmh >= DEPLOY_CUTOFF_KMH) return 0
+  return 1 - (speedKmh - DEPLOY_TAPER_START_KMH) / (DEPLOY_CUTOFF_KMH - DEPLOY_TAPER_START_KMH)
+}
+
 /**
  * Net flow once the lap's deployment allowance is gone.
  *
@@ -151,35 +199,49 @@ const DRAIN_BOOST_MULTIPLIER = 1.6
  * more than the entire allowance and left the budget bounding nothing.
  */
 const RESERVE_FLOW_PER_S = -0.02
-const HARVEST_BRAKE_PER_S = 1.4
-const HARVEST_LIFT_PER_S = 0.4
+/**
+ * MGU-H is removed for 2026 — the MGU-K alone now does all recovery, and its
+ * real per-lap capability rose to up to 8.5MJ (FIA-set, circuit-dependent,
+ * ~5-9MJ) versus a pre-2026 baseline around 2MJ/lap — roughly a 4.25x
+ * increase. The exact recovery POWER in kW isn't published (unlike the 350kW
+ * deploy figure), so these per-tick rates are that same 4.25x scale-up
+ * applied to the model's previous, pre-2026 rates — a documented proportional
+ * estimate, not an independently-sourced number the way DRAIN_DEPLOY_PER_S is.
+ */
+const HARVEST_BRAKE_PER_S = 6.0
+const HARVEST_LIFT_PER_S = 1.7
 /** Very mild trickle in balanced/transitional state (near-zero). */
 const BALANCED_FLOW_PER_S = -0.04
 
 /**
- * Per-lap allowances, in SoC percentage points.
+ * Per-lap allowances, in SoC percentage points, where 100% = the ~4MJ Energy
+ * Store.
  *
- * These are sized against what a lap can physically RECOVER, which is the real
- * constraint. On a representative lap a car spends roughly 25–35 s at full
- * deployment but only 8–12 s braking, so raw demand (~100 pts) far exceeds raw
- * recovery (~17 pts). A deployment allowance set above the recoverable amount
- * therefore drains any car to zero within a few laps — which is exactly what the
- * old mean-reversion spring was masking.
+ * Real 2026 regulation figures directly inform both: MGU-K recovery is now
+ * FIA-capped per circuit at ~5MJ (Monza-type, few braking zones) to ~9MJ
+ * (Monaco/Hungary-type, braking-heavy) — meaningfully more than one store's
+ * worth, so a driver can refill and redeploy more than once per lap at a
+ * braking-heavy circuit. This app has no per-circuit energy table (unlike the
+ * existing per-circuit pit-loss calibration in `PitCycleModel.ts`, a natural
+ * future extension point), so HARVEST_BUDGET_PER_LAP defaults to the
+ * regulation's own mid-point: ~7MJ/lap ≈ 175% of the store.
  *
- * So: the harvest allowance is set just above what braking + lift can deliver in
- * a lap (it caps freak cases without throttling normal recovery), and the
- * deployment allowance is set at or just BELOW that recoverable level. This is
- * the load-bearing relationship — a deployment allowance larger than a lap can
- * recover makes the model structurally net-negative, so SoC falls every lap no
- * matter how the reserve behaves, and the car empties within a few laps.
- *
- * With deployment sized under recovery, a driver who attacks hard runs the
- * lap's allowance out early and finishes it on reserve — the real behaviour —
- * while a driver who manages deployment slowly rebuilds charge. Neither needs an
- * invented attractor to stay in a working window.
+ * DEPLOY_BUDGET_PER_LAP is capped just under 100 (one full store's worth) —
+ * not just "below harvest" as before: the regulation's own "delta State of
+ * Charge" cap is ±4MJ per lap, i.e. AT MOST one store's capacity of net
+ * withdrawal without an interim recharge, which maps directly onto this
+ * model's 0-100 SoC scale. A budget above 100 would be meaningless (SoC
+ * cannot hold more than a full store to begin with) and — found empirically
+ * via this file's own calibration tests — degenerates the model into
+ * draining to the floor and sticking there, since nothing above 100 can ever
+ * actually bind before SoC itself does. 90 (rather than exactly 100) keeps
+ * the budget genuinely distinguishable from the SoC floor itself — a car
+ * that fully exhausts its allowance from a full charge still has real charge
+ * left, matching how the real regulation is a conservative operating limit,
+ * not a "drain to literally zero every lap" design target.
  */
-const HARVEST_BUDGET_PER_LAP = 20
-const DEPLOY_BUDGET_PER_LAP = 15
+const HARVEST_BUDGET_PER_LAP = 175
+const DEPLOY_BUDGET_PER_LAP = 90
 
 /** Maximum believable dt per integration step (guards against cold-start spikes). */
 const MAX_DT_S = 5
@@ -293,14 +355,17 @@ export function integrateErs(
   }
   let flowPerS: number
 
-  if (thr > 75 && spd > 200) {
-    // Deployment zone. Full deployment only while the lap's allowance holds;
-    // after that the car falls back to the much weaker reserve drain.
+  const deployTaper = deployTaperFraction(spd)
+  if (thr > 75 && spd > 200 && deployTaper > 0) {
+    // Deployment zone. Full deployment only while the lap's allowance holds
+    // AND below the 2026 top-speed taper (electrical assist cuts out above
+    // ~345 km/h); after either, the car falls back to the much weaker reserve
+    // drain, or (above the taper) to a plain combustion-only trickle.
     if (deployBudget > 0) {
       const boostActive = isAeroOpen && thr > 85
-      const requested = boostActive
-        ? DRAIN_DEPLOY_PER_S * DRAIN_BOOST_MULTIPLIER
-        : DRAIN_DEPLOY_PER_S
+      const requested =
+        (boostActive ? DRAIN_DEPLOY_PER_S * DRAIN_BOOST_MULTIPLIER : DRAIN_DEPLOY_PER_S) *
+        deployTaper
       // Spend no more than the allowance left, so the budget bounds the drain
       // rather than merely flagging it.
       const spend = Math.min(requested * safeDt, deployBudget)
@@ -392,14 +457,27 @@ export function deriveDeployMode(
   const brkV = brk ?? 0
   const isAeroOpen = isStraightMode(sample.aeroChannel)
 
+  // Above ~345 km/h, 2026's electrical deployment has cut out entirely — the
+  // PU is combustion-only, so neither Boost nor Deploy can be genuinely active
+  // no matter what the throttle/speed/budget inputs otherwise suggest. Falls
+  // through to the HARVEST/BALANCED checks below unaffected (lifting or
+  // braking at top speed is still real harvesting).
+  const deployAvailable = deployTaperFraction(spdV) > 0
   // BOOST = driver-controlled high-power deployment. Overtake eligibility needs
   // timing data and is therefore applied by F1LiveProvider, not guessed here.
   // A spent lap allowance rules Boost out just as an empty battery does.
-  if (isAeroOpen && thrV > 85 && spdV > 200 && soc > BOOST_MIN_SOC && deployBudget > 0) {
+  if (
+    deployAvailable &&
+    isAeroOpen &&
+    thrV > 85 &&
+    spdV > 200 &&
+    soc > BOOST_MIN_SOC &&
+    deployBudget > 0
+  ) {
     return 'BOOST'
   }
   // DEPLOY: high throttle, high speed.
-  if (thrV > 75 && spdV > 200) {
+  if (deployAvailable && thrV > 75 && spdV > 200) {
     return 'DEPLOY'
   }
   // HARVEST: braking phase.

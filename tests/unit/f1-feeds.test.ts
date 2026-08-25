@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   applyCurrentTyres,
+  applyCurrentTyresToStints,
   buildCurrentTyres,
   buildLapPositions,
   buildSessionBests,
@@ -12,13 +13,16 @@ import {
   lapRecordToSample
 } from '@renderer/core/providers/f1normalize'
 import type { F1StreamPoint } from '@shared/f1live'
-import type { Driver, TimingEntry } from '@shared/models'
+import type { Driver, Stint, TimingEntry } from '@shared/models'
 
 const pts = (...ds: unknown[]): F1StreamPoint[] => ds.map((d, i) => ({ t: i, d }))
 
 describe('buildLapPositions', () => {
   it('reads the keyframe array shape', () => {
-    const out = buildLapPositions(pts({ '1': { RacingNumber: '1', LapPosition: ['3', '2', '1'] } }), 99)
+    const out = buildLapPositions(
+      pts({ '1': { RacingNumber: '1', LapPosition: ['3', '2', '1'] } }),
+      99
+    )
     expect(out).toEqual([{ driverNumber: 1, positions: [3, 2, 1] }])
   })
 
@@ -39,12 +43,18 @@ describe('buildLapPositions', () => {
   })
 
   it('nulls unclassified positions rather than inventing zeroes', () => {
-    const out = buildLapPositions(pts({ '5': { RacingNumber: '5', LapPosition: ['1', '0', ''] } }), 99)
+    const out = buildLapPositions(
+      pts({ '5': { RacingNumber: '5', LapPosition: ['1', '0', ''] } }),
+      99
+    )
     expect(out[0].positions).toEqual([1, null, null])
   })
 
   it('ignores points beyond the requested clock', () => {
-    const out = buildLapPositions(pts({ '1': { LapPosition: ['1'] } }, { '1': { LapPosition: ['1', '2'] } }), 0)
+    const out = buildLapPositions(
+      pts({ '1': { LapPosition: ['1'] } }, { '1': { LapPosition: ['1', '2'] } }),
+      0
+    )
     expect(out[0].positions).toEqual([1])
   })
 })
@@ -79,7 +89,9 @@ describe('buildSessionBests', () => {
 
   it('yields null marks for a driver with no times set yet', () => {
     const out = buildSessionBests(
-      pts({ Lines: { '1': { PersonalBestLapTime: { Value: '' }, BestSpeeds: { ST: { Value: '' } } } } }),
+      pts({
+        Lines: { '1': { PersonalBestLapTime: { Value: '' }, BestSpeeds: { ST: { Value: '' } } } }
+      }),
       99
     )
     expect(out[0].bestLap.value).toBeNull()
@@ -145,7 +157,9 @@ describe('collectTeamRadio', () => {
 describe('currentTyres', () => {
   it('reads compound and whether the set is new', () => {
     const out = buildCurrentTyres(
-      pts({ Tyres: { '1': { Compound: 'MEDIUM', New: true }, '3': { Compound: 'HARD', New: false } } }),
+      pts({
+        Tyres: { '1': { Compound: 'MEDIUM', New: true }, '3': { Compound: 'HARD', New: false } }
+      }),
       99
     )
     expect(out).toEqual([
@@ -170,9 +184,61 @@ describe('currentTyres', () => {
   })
 })
 
+describe('applyCurrentTyresToStints', () => {
+  function stint(
+    driverNumber: number,
+    lapEnd: number | null,
+    compound: Stint['tyre']['compound']
+  ): Stint {
+    return {
+      driverNumber,
+      stintNumber: 1,
+      lapStart: 1,
+      lapEnd,
+      tyre: { compound, ageAtStart: 0, isNew: true },
+      degradationPerLap: null
+    }
+  }
+
+  it('fills a missing/unknown compound on the ACTIVE stint only, mirroring applyCurrentTyres', () => {
+    const stints = [stint(1, null, null), stint(3, null, 'SOFT')]
+    const out = applyCurrentTyresToStints(stints, [
+      { driverNumber: 1, compound: 'MEDIUM', isNew: true },
+      { driverNumber: 3, compound: 'HARD', isNew: false }
+    ])
+    expect(out.find((s) => s.driverNumber === 1)?.tyre.compound).toBe('MEDIUM')
+    // A known stint compound is never overwritten, even if CurrentTyres disagrees.
+    expect(out.find((s) => s.driverNumber === 3)?.tyre.compound).toBe('SOFT')
+  })
+
+  it('never patches a completed (non-active) stint', () => {
+    const stints = [stint(1, 20, null)]
+    const out = applyCurrentTyresToStints(stints, [
+      { driverNumber: 1, compound: 'MEDIUM', isNew: true }
+    ])
+    expect(out[0].tyre.compound).toBeNull()
+  })
+
+  it('returns the same array reference when nothing needs patching', () => {
+    const stints = [stint(1, null, 'SOFT')]
+    const out = applyCurrentTyresToStints(stints, [
+      { driverNumber: 1, compound: 'HARD', isNew: false }
+    ])
+    expect(out).toBe(stints)
+  })
+
+  it('is a no-op when there is no CurrentTyres data', () => {
+    const stints = [stint(1, null, null)]
+    expect(applyCurrentTyresToStints(stints, [])).toBe(stints)
+  })
+})
+
 describe('latestTrackMessage', () => {
   it('returns the most recent ticker line at or before the clock', () => {
-    const points = pts({ Message: 'YELLOW IN TRACK SECTOR 5' }, { Message: 'CLEAR IN TRACK SECTOR 5' })
+    const points = pts(
+      { Message: 'YELLOW IN TRACK SECTOR 5' },
+      { Message: 'CLEAR IN TRACK SECTOR 5' }
+    )
     expect(latestTrackMessage(points, 99)).toBe('CLEAR IN TRACK SECTOR 5')
     expect(latestTrackMessage(points, 0)).toBe('YELLOW IN TRACK SECTOR 5')
   })
@@ -180,13 +246,34 @@ describe('latestTrackMessage', () => {
 
 describe('mergeTopThreeDrivers', () => {
   const existing: Driver[] = [
-    { number: 1, code: 'VER', firstName: null, lastName: null, fullName: 'Max Verstappen', broadcastName: null, teamName: 'Red Bull', teamColour: '3671C6', headshotUrl: null, countryCode: null }
+    {
+      number: 1,
+      code: 'VER',
+      firstName: null,
+      lastName: null,
+      fullName: 'Max Verstappen',
+      broadcastName: null,
+      teamName: 'Red Bull',
+      teamColour: '3671C6',
+      headshotUrl: null,
+      countryCode: null
+    }
   ]
 
   it('adds a driver the DriverList has not described', () => {
     const out = mergeTopThreeDrivers(
       existing,
-      pts({ Lines: [{ RacingNumber: '44', Tla: 'HAM', FullName: 'Lewis HAMILTON', Team: 'Ferrari', TeamColour: 'ED1131' }] }),
+      pts({
+        Lines: [
+          {
+            RacingNumber: '44',
+            Tla: 'HAM',
+            FullName: 'Lewis HAMILTON',
+            Team: 'Ferrari',
+            TeamColour: 'ED1131'
+          }
+        ]
+      }),
       99
     )
     expect(out).toHaveLength(2)
@@ -206,15 +293,32 @@ describe('mergeTopThreeDrivers', () => {
 
 describe('pit in/out lap flags', () => {
   const rec = (driverNumber: number, lapNumber: number) => ({
-    driverNumber, lapNumber, lapTime: 90, sector1: null, sector2: null, sector3: null,
-    compound: null, tComplete: lapNumber * 90, isPitInLap: false, isPitOutLap: false
+    driverNumber,
+    lapNumber,
+    lapTime: 90,
+    sector1: null,
+    sector2: null,
+    sector3: null,
+    compound: null,
+    tComplete: lapNumber * 90,
+    isPitInLap: false,
+    isPitOutLap: false
   })
 
   it('marks the pit lap and the following lap from F1s own pit times', () => {
     const index = pitLapIndex([{ driverNumber: 44, duration: 24.1, lap: 12 }])
-    expect(lapRecordToSample(rec(44, 11), index)).toMatchObject({ isPitInLap: false, isPitOutLap: false })
-    expect(lapRecordToSample(rec(44, 12), index)).toMatchObject({ isPitInLap: true, isPitOutLap: false })
-    expect(lapRecordToSample(rec(44, 13), index)).toMatchObject({ isPitInLap: false, isPitOutLap: true })
+    expect(lapRecordToSample(rec(44, 11), index)).toMatchObject({
+      isPitInLap: false,
+      isPitOutLap: false
+    })
+    expect(lapRecordToSample(rec(44, 12), index)).toMatchObject({
+      isPitInLap: true,
+      isPitOutLap: false
+    })
+    expect(lapRecordToSample(rec(44, 13), index)).toMatchObject({
+      isPitInLap: false,
+      isPitOutLap: true
+    })
   })
 
   it('keeps drivers separate', () => {

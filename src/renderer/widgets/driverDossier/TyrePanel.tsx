@@ -1,10 +1,11 @@
 import { AlertTriangle, CircleDashed } from 'lucide-react'
 import { ProvenanceBadge, TyrePill } from '@renderer/components/ui/primitives'
-import { Sparkline } from '@renderer/components/ui/Sparkline'
+import { Chart, gridBase, tooltipBase, cssVar } from '@renderer/lib/echarts'
+import type { EChartsCoreOption } from 'echarts/core'
 import type { TyreReadModel } from '@renderer/core/engines/TyreRead'
 import type { SectorDegradationPoint } from '@renderer/core/engines/SectorDegradation'
 import { TyreHistoryDrawer } from '@renderer/widgets/driverDossier/TyreHistoryDrawer'
-import { cn } from '@renderer/lib/utils'
+import { cn, formatLapTime } from '@renderer/lib/utils'
 
 const HEAVY_SECTOR_DEGRADATION = 0.05
 
@@ -18,29 +19,34 @@ function sectorChipText(point: SectorDegradationPoint): string {
 function SectorDegradationRow({ sectors }: { readonly sectors: SectorDegradationPoint[] }) {
   if (sectors.every((s) => s.slopeSecPerLap == null)) return null
   return (
-    <div className="mt-1.5 flex items-center gap-1.5 rounded-lg border border-hairline/15 bg-black/20 px-2 py-1 text-[10px]">
-      <span className="text-[9px] uppercase tracking-wide text-fg-subtle">Sectors</span>
-      <div className="ml-auto flex items-center gap-2">
-        {sectors.map((s) => (
-          <span
-            key={s.sector}
-            className={cn(
-              'tnum',
-              s.slopeSecPerLap == null
-                ? 'text-fg-subtle'
-                : s.slopeSecPerLap > HEAVY_SECTOR_DEGRADATION
-                  ? 'text-warn'
-                  : 'text-fg-muted'
-            )}
-            title={
-              s.deltaToBestSec != null
-                ? `${s.deltaToBestSec >= 0 ? '+' : ''}${s.deltaToBestSec.toFixed(2)}s vs own best S${s.sector}`
-                : undefined
-            }
-          >
-            {sectorChipText(s)}
-          </span>
-        ))}
+    <div className="mb-1.5">
+      <div className="mb-1 text-[9px] uppercase tracking-wide text-fg-subtle">
+        Sector degradation
+      </div>
+      <div className="grid grid-cols-3 gap-1.5">
+        {sectors.map((s) => {
+          const heavy = s.slopeSecPerLap != null && s.slopeSecPerLap > HEAVY_SECTOR_DEGRADATION
+          return (
+            <div
+              key={s.sector}
+              className={cn(
+                'rounded-lg border px-2 py-1 text-center text-[10px] font-semibold',
+                s.slopeSecPerLap == null
+                  ? 'border-hairline/15 bg-black/20 text-fg-subtle'
+                  : heavy
+                    ? 'border-warn/30 bg-warn/10 text-warn'
+                    : 'border-hairline/15 bg-white/[0.03] text-fg-muted'
+              )}
+              title={
+                s.deltaToBestSec != null
+                  ? `${s.deltaToBestSec >= 0 ? '+' : ''}${s.deltaToBestSec.toFixed(2)}s vs own best S${s.sector}`
+                  : undefined
+              }
+            >
+              {sectorChipText(s)}
+            </div>
+          )
+        })}
       </div>
     </div>
   )
@@ -115,6 +121,56 @@ function TyreStat({
   )
 }
 
+const TONE_TO_CSS_VAR: Record<string, string> = {
+  'text-danger': '--danger',
+  'text-warn': '--warn',
+  'text-good': '--good',
+  'text-fg-subtle': '--fg-subtle'
+}
+
+/** Real axis-scaled trend chart (echarts) replacing a scale-less sparkline — same charting library the other chart widgets already use. */
+function buildTrendChartOption(
+  laps: readonly { lapNumber: number; correctedSec: number }[],
+  tone: string
+): EChartsCoreOption {
+  const color = cssVar(TONE_TO_CSS_VAR[tone] ?? '--fg-subtle')
+  return {
+    grid: { ...gridBase, left: 40, right: 8, top: 6, bottom: 18 },
+    tooltip: {
+      ...tooltipBase,
+      formatter: (params: unknown) => {
+        const p = Array.isArray(params) ? params[0] : params
+        const value = (p as { value: [number, number] }).value
+        return `Lap ${value[0]}<br/><span style="color:${color}">●</span> ${formatLapTime(value[1])}`
+      }
+    },
+    xAxis: {
+      type: 'value',
+      name: 'Lap',
+      nameLocation: 'middle',
+      nameGap: 14,
+      min: 'dataMin',
+      max: 'dataMax',
+      axisLabel: { formatter: '{value}' }
+    },
+    yAxis: {
+      type: 'value',
+      scale: true,
+      axisLabel: { formatter: (val: number) => formatLapTime(val) }
+    },
+    series: [
+      {
+        type: 'line',
+        data: laps.map((l) => [l.lapNumber, l.correctedSec]),
+        itemStyle: { color },
+        lineStyle: { width: 2, color },
+        showSymbol: true,
+        symbolSize: 5
+      }
+    ]
+  }
+}
+
 export function TyrePanel({
   read,
   sectors
@@ -156,6 +212,8 @@ export function TyrePanel({
         )}
       </div>
 
+      {sectors && sectors.length > 0 && <SectorDegradationRow sectors={sectors} />}
+
       <div className="grid grid-cols-3 gap-1.5">
         <TyreStat
           label="Set age"
@@ -174,18 +232,14 @@ export function TyrePanel({
         />
       </div>
 
-      {sectors && sectors.length > 0 && <SectorDegradationRow sectors={sectors} />}
-
       {read.sparklineLaps.length >= 2 && (
-        <div className="mt-1.5 flex items-center gap-2 rounded-lg border border-hairline/15 bg-black/20 px-2 py-1">
-          <span className="text-[9px] uppercase tracking-wide text-fg-subtle">Trend</span>
-          <Sparkline
-            values={read.sparklineLaps.map((l) => l.correctedSec)}
-            tone={degradationTone.replace('text-', 'stroke-')}
-            width={72}
-            height={20}
-            className="ml-auto"
-          />
+        <div className="mt-1.5 rounded-lg border border-hairline/15 bg-black/20 px-1.5 pb-1 pt-1.5">
+          <div className="mb-0.5 px-0.5 text-[9px] uppercase tracking-wide text-fg-subtle">
+            Trend — fuel-corrected lap time
+          </div>
+          <div className="h-16">
+            <Chart option={buildTrendChartOption(read.sparklineLaps, degradationTone)} />
+          </div>
         </div>
       )}
 

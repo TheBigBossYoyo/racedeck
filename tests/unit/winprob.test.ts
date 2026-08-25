@@ -72,8 +72,8 @@ function controlledSnapshot(
       ...timingOverride
     }
   })
-  const drivers = timing.map(
-    (entry) => midRace.drivers.find((driver) => driver.number === entry.driverNumber)!
+  const drivers = timing.map((entry) =>
+    midRace.drivers.find((driver) => driver.number === entry.driverNumber)!
   )
 
   return {
@@ -156,7 +156,7 @@ describe('WinProbabilityEngine.compute', () => {
     const late = WinProbabilityEngine.compute(lateRace)
     const leaderLate = late.chances.find((c) => c.driverNumber === leader)!
     const leaderMid = model.chances.find((c) => c.driverNumber === leader)!
-    expect(late.lapsRemaining! ).toBeLessThan(model.lapsRemaining!)
+    expect(late.lapsRemaining!).toBeLessThan(model.lapsRemaining!)
     expect(leaderLate.winPct).toBeGreaterThan(leaderMid.winPct)
   })
 
@@ -204,12 +204,10 @@ describe('WinProbabilityEngine.compute', () => {
   })
 
   it('moves early-race probabilities when rain increases uncertainty', () => {
-    const green = controlledSnapshot([
-      { gapToLeader: 0 },
-      { gapToLeader: 3 },
-      { gapToLeader: 8 },
-      { gapToLeader: 14 }
-    ], { currentLap: 1, totalLaps: 60 })
+    const green = controlledSnapshot(
+      [{ gapToLeader: 0 }, { gapToLeader: 3 }, { gapToLeader: 8 }, { gapToLeader: 14 }],
+      { currentLap: 1, totalLaps: 60 }
+    )
     const wet = { ...green, weather: { ...green.weather!, rainfall: true } }
     const greenModel = WinProbabilityEngine.compute(green)
     const wetModel = WinProbabilityEngine.compute(wet)
@@ -340,13 +338,62 @@ describe('WinProbabilityEngine.compute', () => {
     )
 
     const driverB = advantaged.timing[1].driverNumber
-    const neutralB = WinProbabilityEngine.compute(neutral).chances.find((c) => c.driverNumber === driverB)!
+    const neutralB = WinProbabilityEngine.compute(neutral).chances.find(
+      (c) => c.driverNumber === driverB
+    )!
     const advantagedModel = WinProbabilityEngine.compute(advantaged)
     const advantagedB = advantagedModel.chances.find((c) => c.driverNumber === driverB)!
 
     expect(advantagedModel.chances[0].driverNumber).toBe(driverB)
     expect(advantagedB.winPct).toBeGreaterThan(neutralB.winPct)
     expect(advantagedB.factors.join(' ')).toMatch(/Pace|tyre/i)
+  })
+
+  it('ranks a faster driver masked by close traffic above a slower driver in clear air', () => {
+    // Regression for a double-counted traffic penalty: the model used to
+    // discount a traffic-masked driver's pace advantage twice (once via
+    // confidence, once via magnitude), compounding to a ~95.5% wipeout — so a
+    // genuinely faster driver stuck within 1.6s of the car ahead scored far
+    // below a slower driver running in clear air. Traffic should cost
+    // confidence, not erase real pace.
+    const snapshot = controlledSnapshot(
+      [
+        {
+          gapToLeader: 0,
+          recentPace: 91,
+          recentPaceSampleCount: 6,
+          tyreCompound: 'MEDIUM',
+          stintAgeLaps: 10
+        },
+        {
+          // In traffic (<=1.6s to the car ahead) but genuinely ~2s/lap faster.
+          gapToLeader: 4,
+          intervalAhead: 1.0,
+          recentPace: 89,
+          recentPaceSampleCount: 6,
+          tyreCompound: 'MEDIUM',
+          stintAgeLaps: 10
+        },
+        {
+          // Clear air, further back, and slower.
+          gapToLeader: 12,
+          intervalAhead: 8,
+          recentPace: 92,
+          recentPaceSampleCount: 6,
+          tyreCompound: 'MEDIUM',
+          stintAgeLaps: 10
+        }
+      ],
+      { currentLap: 24, totalLaps: 72 }
+    )
+
+    const trafficDriver = snapshot.timing[1].driverNumber
+    const clearAirDriver = snapshot.timing[2].driverNumber
+    const model = WinProbabilityEngine.compute(snapshot)
+    const traffic = model.chances.find((c) => c.driverNumber === trafficDriver)!
+    const clearAir = model.chances.find((c) => c.driverNumber === clearAirDriver)!
+
+    expect(traffic.winPct).toBeGreaterThan(clearAir.winPct)
   })
 
   it('keeps a normalized non-zero win field while admitting sparse early data', () => {
@@ -366,7 +413,11 @@ describe('WinProbabilityEngine.compute', () => {
     expect(m.dataQuality).toBe('low')
     expect(m.chances.reduce((sum, chance) => sum + chance.winPct, 0)).toBeCloseTo(100, 4)
     for (const chance of m.chances) expect(chance.winPct).toBeGreaterThan(0)
-    expect(m.chances.some((chance) => chance.factors.some((factor) => /Gap (estimated|partly inferred)/.test(factor)))).toBe(true)
+    expect(
+      m.chances.some((chance) =>
+        chance.factors.some((factor) => /Gap (estimated|partly inferred)/.test(factor))
+      )
+    ).toBe(true)
   })
 
   it('does not rate a P20 car near the leader from a contradictory one-second gap', () => {

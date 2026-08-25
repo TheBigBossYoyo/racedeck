@@ -1477,3 +1477,160 @@ export function paceComparison(snapshot: RaceSnapshot, driverNumber: number): Pa
 
   return result
 }
+
+// ── Pace duel: any two drivers, degradation-aware closing ETA ───────────────
+
+/** Below this magnitude a closing rate reads as noise, not a real trend (matches `paceComparison`'s threshold). */
+const PACE_DUEL_TREND_DEADBAND = 0.03
+/** Projection horizon when the session's remaining-lap count isn't known. */
+const PACE_DUEL_MAX_PROJECTION_LAPS = 40
+
+export type PaceDuelTrend = 'closing' | 'opening' | 'stable'
+
+export interface PaceDuelSide {
+  number: number
+  code: string
+  position: number | null
+  currentPace: number | null
+  /** s/lap, fuel-corrected, from the current stint (same basis the Tyre dossier shows); positive = getting slower. Null without enough clean laps. */
+  degradationPerLap: number | null
+}
+
+export interface PaceDuel {
+  available: boolean
+  /** Whichever of the two chosen drivers is currently ahead on track. */
+  ahead: PaceDuelSide
+  behind: PaceDuelSide
+  gapSec: number | null
+  /** At the CURRENT moment, before any degradation projection — positive means the gap is shrinking. */
+  closingRatePerLap: number | null
+  trend: PaceDuelTrend
+  /**
+   * Laps until the gap crosses zero. Unlike a flat `gap / closingRate`
+   * division, this projects each driver's OWN current-stint degradation
+   * trend forward lap by lap — a driver whose tyres are falling away closes
+   * (or opens) the gap faster than their current single-lap pace alone
+   * suggests. A driver with no readable degradation trend is projected flat
+   * (their current pace, unchanged) rather than dropping the estimate
+   * entirely — only a genuinely missing PACE reading (not degradation) makes
+   * this null. Also null when the gap doesn't close within the laps left in
+   * the session.
+   */
+  lapsToResolve: number | null
+}
+
+function paceDuelSide(
+  snapshot: RaceSnapshot,
+  entry: TimingEntry,
+  codeOf: (n: number) => string,
+  fuelCoefficient: FuelCoefficient | undefined
+): PaceDuelSide {
+  const driverLaps = snapshot.laps.filter((l) => l.driverNumber === entry.driverNumber)
+  const stintLaps = currentStintLaps(entry, driverLaps)
+  return {
+    number: entry.driverNumber,
+    code: codeOf(entry.driverNumber),
+    position: entry.position,
+    currentPace: driverRecentPace(snapshot, entry.driverNumber),
+    degradationPerLap: StrategyEngine.degradationTrend(stintLaps, 6, fuelCoefficient)
+  }
+}
+
+/** Project the gap forward lap by lap, each side's pace evolving by its own degradation trend. */
+function projectPaceDuelClosingLaps(
+  gapSec: number | null,
+  ahead: PaceDuelSide,
+  behind: PaceDuelSide,
+  lapsRemaining: number | null
+): number | null {
+  if (gapSec == null || gapSec <= 0) return null
+  if (ahead.currentPace == null || behind.currentPace == null) return null
+  const horizon =
+    lapsRemaining != null
+      ? Math.min(lapsRemaining, PACE_DUEL_MAX_PROJECTION_LAPS)
+      : PACE_DUEL_MAX_PROJECTION_LAPS
+  if (horizon <= 0) return null
+  let remainingGap = gapSec
+  for (let lap = 1; lap <= horizon; lap++) {
+    const aheadPace = ahead.currentPace + (ahead.degradationPerLap ?? 0) * lap
+    const behindPace = behind.currentPace + (behind.degradationPerLap ?? 0) * lap
+    remainingGap -= aheadPace - behindPace
+    if (remainingGap <= 0) return lap
+  }
+  return null
+}
+
+/**
+ * Pace duel between any two drivers, not just track-adjacent ones (unlike
+ * `paceComparison`, which only ever compares the focus driver against
+ * whoever is immediately ahead/behind). Gap is derived from the difference
+ * in `gapToLeader` (both already computed by the timing feed), same-lap
+ * assumption noted like the rest of this file's gap logic.
+ */
+export function paceBattleBetween(
+  snapshot: RaceSnapshot,
+  driverA: number,
+  driverB: number
+): PaceDuel {
+  const liveSnapshot = snapshotWithKnownLaps(snapshot)
+  const codeOf = (n: number) => liveSnapshot.drivers.find((d) => d.number === n)?.code ?? `#${n}`
+  const entryOf = (n: number) => liveSnapshot.timing.find((t) => t.driverNumber === n)
+  const entryA = entryOf(driverA)
+  const entryB = entryOf(driverB)
+
+  const unavailable: PaceDuel = {
+    available: false,
+    ahead: {
+      number: driverA,
+      code: codeOf(driverA),
+      position: entryA?.position ?? null,
+      currentPace: null,
+      degradationPerLap: null
+    },
+    behind: {
+      number: driverB,
+      code: codeOf(driverB),
+      position: entryB?.position ?? null,
+      currentPace: null,
+      degradationPerLap: null
+    },
+    gapSec: null,
+    closingRatePerLap: null,
+    trend: 'stable',
+    lapsToResolve: null
+  }
+  if (!entryA || !entryB || entryA.position == null || entryB.position == null) return unavailable
+
+  const [aheadEntry, behindEntry] =
+    entryA.position <= entryB.position ? [entryA, entryB] : [entryB, entryA]
+
+  const num = (v: number | '+1 LAP' | null): number | null => (typeof v === 'number' ? v : null)
+  const gapAhead = num(aheadEntry.gapToLeader)
+  const gapBehind = num(behindEntry.gapToLeader)
+  const gapSec = gapAhead != null && gapBehind != null ? Math.abs(gapBehind - gapAhead) : null
+
+  const fuelCoefficient = estimateFuelCoefficient(liveSnapshot)
+  const ahead = paceDuelSide(liveSnapshot, aheadEntry, codeOf, fuelCoefficient)
+  const behind = paceDuelSide(liveSnapshot, behindEntry, codeOf, fuelCoefficient)
+
+  const closingRatePerLap =
+    ahead.currentPace != null && behind.currentPace != null
+      ? ahead.currentPace - behind.currentPace
+      : null
+  const trend: PaceDuelTrend =
+    closingRatePerLap == null
+      ? 'stable'
+      : closingRatePerLap > PACE_DUEL_TREND_DEADBAND
+        ? 'closing'
+        : closingRatePerLap < -PACE_DUEL_TREND_DEADBAND
+          ? 'opening'
+          : 'stable'
+
+  const lapsRemaining =
+    liveSnapshot.totalLaps != null && liveSnapshot.currentLap != null
+      ? Math.max(0, liveSnapshot.totalLaps - liveSnapshot.currentLap)
+      : null
+  const lapsToResolve = projectPaceDuelClosingLaps(gapSec, ahead, behind, lapsRemaining)
+
+  return { available: true, ahead, behind, gapSec, closingRatePerLap, trend, lapsToResolve }
+}

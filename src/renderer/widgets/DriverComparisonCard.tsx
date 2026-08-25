@@ -10,7 +10,7 @@ import { alignTelemetryByLapTime } from '@renderer/core/engines/TelemetryCompare
 import { TelemetryOverlayChart } from '@renderer/widgets/TelemetryOverlayChart'
 import type { Driver, TimingEntry } from '@shared/models'
 
-function DriverSelect({
+export function DriverSelect({
   drivers,
   value,
   onChange,

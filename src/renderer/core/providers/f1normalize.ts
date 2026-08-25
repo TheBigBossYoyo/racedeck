@@ -1188,6 +1188,33 @@ export function applyCurrentTyres(entries: TimingEntry[], tyres: CurrentTyre[]):
 }
 
 /**
+ * Same gap-fill as `applyCurrentTyres`, but for each driver's ACTIVE stint (the
+ * last one, `lapEnd === null`) in a `Stint[]` array — so a widget rendering the
+ * stint history (e.g. tyre strategy bars) doesn't disagree with `TimingEntry`
+ * right after a pit stop, when `TimingAppData`'s stint history hasn't caught up
+ * yet but `CurrentTyres` already knows what was fitted.
+ *
+ * Pure: returns a new array only where a correction actually applies, so a
+ * caller holding a cached `Stint[]` (e.g. `F1LiveProvider`'s per-appState-
+ * version stint cache) is never mutated in place — unlike `applyCurrentTyres`,
+ * which is safe to mutate because `TimingEntry[]` is rebuilt fresh every call.
+ */
+export function applyCurrentTyresToStints(stints: Stint[], tyres: CurrentTyre[]): Stint[] {
+  if (tyres.length === 0) return stints
+  const byDriver = new Map(tyres.map((t) => [t.driverNumber, t]))
+  let changed = false
+  const out = stints.map((stint) => {
+    if (stint.lapEnd !== null) return stint
+    if (stint.tyre.compound != null && stint.tyre.compound !== 'UNKNOWN') return stint
+    const tyre = byDriver.get(stint.driverNumber)
+    if (!tyre || tyre.compound === 'UNKNOWN') return stint
+    changed = true
+    return { ...stint, tyre: { ...stint.tyre, compound: tyre.compound } }
+  })
+  return changed ? out : stints
+}
+
+/**
  * Fill gaps in the driver list from `TopThree`.
  *
  * `TopThree` carries the same identity fields as DriverList (Tla, broadcast

@@ -118,7 +118,7 @@ describe('TyrePanel sparkline', () => {
       })
     )
 
-    expect(screen.getByText('Trend')).toBeVisible()
+    expect(screen.getByText('Trend — fuel-corrected lap time')).toBeVisible()
   })
 
   it('omits the trend row with fewer than 2 clean laps', () => {

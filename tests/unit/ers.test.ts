@@ -73,7 +73,13 @@ describe('integrateErs', () => {
       }
     }
     expect(max - min).toBeGreaterThan(8) // genuinely dynamic
-    expect(min).toBeGreaterThan(0) // never pinned at the floor
+    // At the 2026-calibrated deploy rate, a sustained full-deployment stretch
+    // genuinely can flatten the store to 0 — the real "power derate" concern
+    // reported around the 2026 regs — so touching the floor is expected
+    // behaviour now, not a modelling defect. `>= 0` (already guaranteed by
+    // the per-tick assertions above) plus the dynamic-range check above are
+    // what actually distinguish "recovers and varies" from "stuck at zero".
+    expect(min).toBeGreaterThanOrEqual(0)
     expect(max).toBeLessThan(100) // never pinned at the ceiling
   })
 
@@ -92,15 +98,23 @@ describe('integrateErs', () => {
         max = Math.max(max, st.soc)
       }
     }
-    expect(min).toBeGreaterThan(0)
+    // See the "genuinely dynamic" test above for why touching the floor is
+    // expected at the 2026-calibrated deploy rate, not a modelling defect.
+    expect(min).toBeGreaterThanOrEqual(0)
     expect(max).toBeLessThan(100)
   })
 
   it('bounds deployment by the lap allowance, and startLap restores it', () => {
-    let st = initErsState()
+    // Start from a full charge: at the 2026-calibrated rate, the ~90-point
+    // deployment allowance now represents most of a lap's usable SoC range,
+    // so starting from the model's normal ~65% seed would hit the SoC floor
+    // itself before the budget did, making the two indistinguishable. A full
+    // charge keeps them separable (budget exhausts around 10% SoC, not 0%).
+    let st = { ...initErsState(), soc: 100 }
     // Burn the whole deployment allowance on one long straight.
-    for (let i = 0; i < 40; i++) st = integrateErs(st, deploy, 1)
+    for (let i = 0; i < 15; i++) st = integrateErs(st, deploy, 1)
     expect(st.deployBudget).toBe(0)
+    expect(st.soc).toBeGreaterThan(0)
 
     // Spent allowance ⇒ the next deploy second costs far less than a fresh one.
     const spentDrain = st.soc - integrateErs(st, deploy, 1).soc
@@ -171,6 +185,36 @@ describe('deriveDeployMode', () => {
       deriveDeployMode({ throttle: null, speed: null, brake: null, aeroChannel: null }, 60)
     ).toBeNull()
   })
+
+  it('cuts electrical deployment above the 2026 top-speed taper (~345 km/h)', () => {
+    // Full throttle, well past the taper — even Boost's own aero/throttle/speed
+    // conditions are met, but 2026 regs cut electrical assist entirely up here.
+    const topSpeed: ErsTelemetrySample = { throttle: 100, speed: 350, brake: 0, aeroChannel: 12 }
+    expect(deriveDeployMode(topSpeed, 60)).toBe('BALANCED')
+    // Below the taper start, deployment behaves exactly as before.
+    const belowTaper: ErsTelemetrySample = { throttle: 100, speed: 330, brake: 0, aeroChannel: 12 }
+    expect(deriveDeployMode(belowTaper, 60)).toBe('BOOST')
+  })
+})
+
+describe('integrateErs — top-speed deployment taper', () => {
+  it('does not drain the deploy budget above the 2026 taper cutoff', () => {
+    const start = { soc: 80, sampleCount: 10, deployBudget: 90 }
+    const topSpeed: ErsTelemetrySample = { throttle: 100, speed: 350, brake: 0, aeroChannel: 0 }
+    const next = integrateErs(start, topSpeed, 1)
+    expect(next.deployBudget).toBe(90) // untouched — no assist above the cutoff
+    expect(next.soc).toBeCloseTo(start.soc, 1) // only the mild BALANCED trickle applies
+  })
+
+  it('tapers deployment linearly inside the 340-345 km/h window', () => {
+    const start = { soc: 80, sampleCount: 10, deployBudget: 90 }
+    const midTaper: ErsTelemetrySample = { throttle: 100, speed: 342.5, brake: 0, aeroChannel: 0 }
+    const fullPower: ErsTelemetrySample = { throttle: 100, speed: 300, brake: 0, aeroChannel: 0 }
+    const midDrain = start.soc - integrateErs(start, midTaper, 1).soc
+    const fullDrain = start.soc - integrateErs(start, fullPower, 1).soc
+    expect(midDrain).toBeGreaterThan(0)
+    expect(midDrain).toBeLessThan(fullDrain)
+  })
 })
 
 describe('applyOvertakeEligibility', () => {
@@ -237,8 +281,8 @@ describe('computeErsEstimate', () => {
   })
 
   it('reports the deployment allowance remaining as a percentage of the per-lap budget', () => {
-    // DEPLOY_BUDGET_PER_LAP is 15; 6/15 = 40%.
-    const est = computeErsEstimate({ soc: 50, sampleCount: 50, deployBudget: 6 }, deploy)
+    // DEPLOY_BUDGET_PER_LAP is 90; 36/90 = 40%.
+    const est = computeErsEstimate({ soc: 50, sampleCount: 50, deployBudget: 36 }, deploy)
     expect(est.deployBudgetRemainingPct).toBe(40)
     // An absent budget reads as a full one, same as `deploymentLimited`'s fallback.
     expect(computeErsEstimate({ soc: 50, sampleCount: 50 }, deploy).deployBudgetRemainingPct).toBe(
@@ -323,15 +367,20 @@ describe('ERS calibration across representative circuits', () => {
           const prevSoc = st.soc
           st = integrateErs(st, s, SAMPLE_DT)
           maxStepDelta = Math.max(maxStepDelta, Math.abs(st.soc - prevSoc))
-          expect(st.soc).toBeGreaterThan(0)
+          // At the 2026-calibrated deploy rate, a sustained full-deployment
+          // stretch genuinely can flatten the store to 0 (the real "power
+          // derate" concern reported around the 2026 regs) — touching the
+          // floor is expected behaviour now, not a modelling defect.
+          expect(st.soc).toBeGreaterThanOrEqual(0)
           expect(st.soc).toBeLessThan(100)
           expect(st.harvestBudget).toBeGreaterThanOrEqual(0)
           expect(st.deployBudget).toBeGreaterThanOrEqual(0)
         }
       }
-      // Fastest possible per-tick flow (boosted deploy, ~2.88%/s) over one 0.5s
-      // sample is well under 2 points; anything near 3 would mean a spike.
-      expect(maxStepDelta).toBeLessThan(3)
+      // Fastest possible per-tick flow (boosted deploy, 350kW-derived 8.75%/s
+      // x the 1.6 Boost multiplier = 14 %/s) over one 0.5s sample is 7 points;
+      // anything near 8 would mean an extra, unaccounted-for spike.
+      expect(maxStepDelta).toBeLessThan(7.5)
     })
 
     it(`${name}: reported confidence never regresses across a full race`, () => {
@@ -366,7 +415,10 @@ describe('ERS calibration across representative circuits', () => {
     const afterHugeGap = integrateErs(st, braking, 5).soc
     const afterReportedGap = integrateErs(st, braking, 5_000).soc
     expect(afterReportedGap).toBe(afterHugeGap)
-    expect(Math.abs(afterReportedGap - beforeGap)).toBeLessThan(8)
+    // At the 2026-calibrated harvest rate (6 %/s), a full MAX_DT_S=5s braking
+    // step can recover up to 30 points before the working-window taper caps
+    // it — comfortably bounded, but well above the old, much gentler rate.
+    expect(Math.abs(afterReportedGap - beforeGap)).toBeLessThan(25)
   })
 })
 
