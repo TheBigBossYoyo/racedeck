@@ -58,6 +58,7 @@ import {
   buildStints,
   buildTiming,
   buildTrackPath,
+  debugTrackTraceInfo,
   collectRaceControl,
   currentStint,
   lapCountAt,
@@ -651,13 +652,19 @@ export class F1LiveProvider implements DataProvider {
   }
 
   getDiagnostics(): ProviderDiagnostics {
+    const trace = debugTrackTraceInfo(this.positionPoints)
     return {
       trackPathCacheStatus: this.trackPathCacheStatus,
       cacheSchemaVersion: TRACK_PATH_CACHE_SCHEMA_VERSION,
       enrichmentProcessedPoints: this.ersProcessed,
       enrichmentIssue: this.enrichmentIssue
         ? `${this.enrichmentIssue.feed}: ${this.enrichmentIssue.message}`
-        : null
+        : null,
+      trackRawPointCount: trace.rawPointCount,
+      trackReferenceDriver: trace.referenceDriver,
+      trackOpenTraceLength: trace.openTraceLength,
+      trackAdoptedLength: this.trackPath.length,
+      trackPathClosed: this.trackPathClosed
     }
   }
 

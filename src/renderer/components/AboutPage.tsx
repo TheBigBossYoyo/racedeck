@@ -126,7 +126,17 @@ export function AboutPage() {
                   ],
                   ['Cache schema', `v${diagnostics.cacheSchemaVersion}`],
                   ['Telemetry points', diagnostics.enrichmentProcessedPoints.toLocaleString()],
-                  ['Enrichment', diagnostics.enrichmentIssue ? 'degraded' : 'ok']
+                  ['Enrichment', diagnostics.enrichmentIssue ? 'degraded' : 'ok'],
+                  ['Position points', diagnostics.trackRawPointCount.toLocaleString()],
+                  [
+                    'Track reference car',
+                    diagnostics.trackReferenceDriver == null
+                      ? 'none yet'
+                      : `#${diagnostics.trackReferenceDriver}`
+                  ],
+                  ['Open trace length', diagnostics.trackOpenTraceLength.toLocaleString()],
+                  ['Adopted outline', diagnostics.trackAdoptedLength.toLocaleString()],
+                  ['Outline closed', diagnostics.trackPathClosed ? 'yes' : 'no']
                 ].map(([k, v]) => (
                   <div key={k}>
                     <div className="text-2xs uppercase tracking-wide text-fg-subtle">{k}</div>

@@ -71,6 +71,7 @@ export function TrackMap() {
   const setFocus = useSessionStore((s) => s.setFocusDriver)
   const focusDriver = useSessionStore((s) => s.focusDriver)
   const playing = useSessionStore((s) => s.playing)
+  const getDiagnostics = useSessionStore((s) => s.getDiagnostics)
   const favorites = useSettingsStore((s) => s.favorites)
   const performanceMode = useSettingsStore((s) => s.performanceMode)
   const reducedMotion = useSettingsStore((s) => s.theme.reducedMotion)
@@ -281,7 +282,20 @@ export function TrackMap() {
             <Badge tone="good">Live positions</Badge>
           )}
           {hasCoordinatePositions && !geometry.path && (
-            <span title="No car has completed a full lap since connecting yet, and no cached outline exists for this race weekend — positions are real, the outline just isn't traced yet.">
+            <span
+              title={(() => {
+                const d = getDiagnostics()
+                const base =
+                  "No car has completed a full lap since connecting yet, and no cached outline exists for this race weekend — positions are real, the outline just isn't traced yet."
+                if (!d) return base
+                return (
+                  `${base}\n\nDiagnostics — position samples: ${d.trackRawPointCount}, ` +
+                  `reference car: ${d.trackReferenceDriver == null ? 'none yet' : `#${d.trackReferenceDriver}`}, ` +
+                  `open trace: ${d.trackOpenTraceLength} pts, adopted: ${d.trackAdoptedLength} pts, ` +
+                  `closed: ${d.trackPathClosed ? 'yes' : 'no'}`
+                )
+              })()}
+            >
               <Badge tone="neutral">Tracing outline…</Badge>
             </span>
           )}

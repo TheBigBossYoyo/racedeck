@@ -6,6 +6,8 @@ import {
   buildTiming,
   buildTrackPath,
   buildClosedTrackPath,
+  debugTrackTraceInfo,
+  pickReferenceDriver,
   positionCoordinatesAt,
   buildStints,
   currentStint,
@@ -524,6 +526,41 @@ describe('buildTrackPath', () => {
       { x: 200, y: 5 },
       { x: 300, y: 5 }
     ])
+  })
+})
+
+describe('pickReferenceDriver / debugTrackTraceInfo', () => {
+  it('reports no reference driver and zero lengths for an empty feed', () => {
+    expect(pickReferenceDriver([])).toBeNull()
+    expect(debugTrackTraceInfo([])).toEqual({
+      rawPointCount: 0,
+      referenceDriver: null,
+      openTraceLength: 0
+    })
+  })
+
+  it('picks the most-present on-track driver and reports the open trace length', () => {
+    // Steps must clear buildTrackPath's default 150-unit thinning distance —
+    // debugTrackTraceInfo calls it with default args, unlike the buildTrackPath
+    // tests above which pass minDistance=0 explicitly.
+    const points: F1StreamPoint[] = Array.from({ length: 4 }, (_, i) => ({
+      t: i,
+      d: {
+        Position: {
+          '0': {
+            Entries: {
+              '1': { Status: 'OffTrack', X: 0, Y: 0 },
+              '4': { Status: 'OnTrack', X: i * 200, Y: 5 }
+            }
+          }
+        }
+      }
+    }))
+    expect(pickReferenceDriver(points)).toBe(4)
+    const info = debugTrackTraceInfo(points)
+    expect(info.rawPointCount).toBe(4)
+    expect(info.referenceDriver).toBe(4)
+    expect(info.openTraceLength).toBe(4)
   })
 })
 

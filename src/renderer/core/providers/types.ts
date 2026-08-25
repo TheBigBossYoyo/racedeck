@@ -134,6 +134,15 @@ export interface ProviderDiagnostics {
   cacheSchemaVersion: number
   enrichmentProcessedPoints: number
   enrichmentIssue: string | null
+  /** Raw Position stream points accumulated so far (live map outline). */
+  trackRawPointCount: number
+  /** Driver number the outline trace follows, or null if none found yet. */
+  trackReferenceDriver: number | null
+  /** Length of the current downsampled-but-not-yet-adopted trace. */
+  trackOpenTraceLength: number
+  /** Length of the ADOPTED trace (open fallback or closed), 0 if neither yet. */
+  trackAdoptedLength: number
+  trackPathClosed: boolean
 }
 
 /** Empty availability with everything off — a safe default. */

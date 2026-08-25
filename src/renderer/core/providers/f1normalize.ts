@@ -663,13 +663,17 @@ function stableKey(value: string): string {
  */
 const TRACK_PATH_MAX_POINTS = 700
 
-/** Build one stable, bounded circuit trace from the decoded Position feed. */
-export function buildTrackPath(
-  points: F1StreamPoint[],
-  maxPoints = TRACK_PATH_MAX_POINTS,
-  minDistance = 150
-): { x: number; y: number }[] {
-  if (points.length === 0) return []
+/**
+ * Whichever driver has the most on-track samples in the opening window —
+ * the one whose trajectory `buildTrackPath`/`buildClosedTrackPath` follow.
+ * Exported (alongside `debugTrackTraceInfo`) purely for diagnostics: the map
+ * outline has gone through several rounds of live-session bug reports where
+ * static analysis alone couldn't pin down which stage was actually failing
+ * (no reference driver found vs. found but never accumulating vs.
+ * accumulating but never closing) — these numbers make that visible instead
+ * of guessed at.
+ */
+export function pickReferenceDriver(points: F1StreamPoint[]): number | null {
   const presence = new Map<number, number>()
   // Sample well beyond the opening frames: in practice and qualifying the first
   // minutes can be an empty track, and the reference car must be one that
@@ -683,7 +687,17 @@ export function buildTrackPath(
       presence.set(driverNumber, (presence.get(driverNumber) ?? 0) + 1)
     }
   }
-  const referenceDriver = [...presence.entries()].sort((a, b) => b[1] - a[1])[0]?.[0]
+  return [...presence.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null
+}
+
+/** Build one stable, bounded circuit trace from the decoded Position feed. */
+export function buildTrackPath(
+  points: F1StreamPoint[],
+  maxPoints = TRACK_PATH_MAX_POINTS,
+  minDistance = 150
+): { x: number; y: number }[] {
+  if (points.length === 0) return []
+  const referenceDriver = pickReferenceDriver(points)
   if (referenceDriver == null) return []
 
   const path: { x: number; y: number }[] = []
@@ -699,6 +713,25 @@ export function buildTrackPath(
     }
   }
   return path
+}
+
+/** Raw diagnostic breakdown of where a live outline trace currently stands. */
+export interface TrackTraceDebugInfo {
+  /** Total raw Position stream points accumulated so far. */
+  rawPointCount: number
+  /** Driver number whose trajectory is being followed, or null if none found yet. */
+  referenceDriver: number | null
+  /** Length of the downsampled (but not yet necessarily closed) trace. */
+  openTraceLength: number
+}
+
+export function debugTrackTraceInfo(points: F1StreamPoint[]): TrackTraceDebugInfo {
+  const referenceDriver = pickReferenceDriver(points)
+  return {
+    rawPointCount: points.length,
+    referenceDriver,
+    openTraceLength: referenceDriver == null ? 0 : buildTrackPath(points).length
+  }
 }
 
 /**
