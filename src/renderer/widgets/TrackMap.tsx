@@ -111,13 +111,28 @@ export function TrackMap() {
         position.x == null || position.y == null ? [] : [{ x: position.x, y: position.y }]
       )
 
-      const frameKey = `${snapshot.session.id}:${trace.length}`
+      // Keyed on session ONLY, not trace length: the outline can go from no
+      // trace -> an open best-effort trace -> a closed one, each a DIFFERENT
+      // (and typically SMALLER-at-first) box than whatever car positions had
+      // already been accumulated. Resetting bounds to `traceBounds` alone at
+      // that moment discarded that accumulated extent and replaced it with a
+      // narrower one, so drivers standing in track sections the not-yet-
+      // complete trace didn't cover yet suddenly rendered outside the loop —
+      // then the box slowly re-grew back via live positions, reading as a
+      // reflow/flicker right when the outline first appeared. The trace's own
+      // bounds are now unioned in below every tick instead, so a newly
+      // available or upgraded trace can only ever EXTEND the box, never
+      // shrink or replace it.
+      const frameKey = snapshot.session.id
       if (frameRef.current.key !== frameKey) {
         frameRef.current = { key: frameKey, bounds: traceBounds }
       }
       // Extend to hold any car outside the traced racing line — a pit lane, a
       // run-off excursion — rather than drawing it off the edge of the panel.
-      const currentBounds = unionBounds(frameRef.current.bounds, calculateBounds(currentPoints))
+      const currentBounds = unionBounds(
+        unionBounds(frameRef.current.bounds, traceBounds),
+        calculateBounds(currentPoints)
+      )
       frameRef.current.bounds = currentBounds
 
       if (currentBounds) {

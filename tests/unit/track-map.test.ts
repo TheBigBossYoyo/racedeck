@@ -1,5 +1,5 @@
 import { createElement } from 'react'
-import { cleanup, render } from '@testing-library/react'
+import { act, cleanup, render } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Driver, PositionSample, SessionInfo, TimingEntry } from '@shared/models'
 import type { RaceSnapshot } from '@renderer/core/providers/types'
@@ -9,7 +9,13 @@ import { useSessionStore } from '@renderer/store/sessionStore'
 import { useSettingsStore } from '@renderer/store/settingsStore'
 
 const markerCalls = vi.hoisted(
-  (): Array<{ animate: boolean; driverNumber: number; durationMs: number }> => []
+  (): Array<{
+    animate: boolean
+    driverNumber: number
+    durationMs: number
+    x: number
+    y: number
+  }> => []
 )
 
 vi.mock('@renderer/widgets/trackMap/TrackMapDriverMarker', () => ({
@@ -19,10 +25,10 @@ vi.mock('@renderer/widgets/trackMap/TrackMapDriverMarker', () => ({
     durationMs
   }: {
     animate: boolean
-    dot: { number: number }
+    dot: { number: number; x: number; y: number }
     durationMs: number
   }) => {
-    markerCalls.push({ animate, driverNumber: dot.number, durationMs })
+    markerCalls.push({ animate, driverNumber: dot.number, durationMs, x: dot.x, y: dot.y })
     return createElement('g', { 'data-testid': `marker-${dot.number}` })
   }
 }))
@@ -171,7 +177,7 @@ describe('TrackMap interpolation', () => {
 
     renderTrackMap(snapshot, false, false)
 
-    expect(markerCalls).toEqual([{ animate: true, driverNumber: 4, durationMs: 900 }])
+    expect(markerCalls).toMatchObject([{ animate: true, driverNumber: 4, durationMs: 900 }])
   })
 
   it('keeps paused replay coordinates static when the snapshot is not live', () => {
@@ -182,7 +188,7 @@ describe('TrackMap interpolation', () => {
 
     renderTrackMap(snapshot, false, false)
 
-    expect(markerCalls).toEqual([{ animate: false, driverNumber: 4, durationMs: 280 }])
+    expect(markerCalls).toMatchObject([{ animate: false, driverNumber: 4, durationMs: 280 }])
   })
 
   it('keeps the shorter replay interpolation while playback is running', () => {
@@ -193,7 +199,7 @@ describe('TrackMap interpolation', () => {
 
     renderTrackMap(snapshot, true, false)
 
-    expect(markerCalls).toEqual([{ animate: true, driverNumber: 4, durationMs: 280 }])
+    expect(markerCalls).toMatchObject([{ animate: true, driverNumber: 4, durationMs: 280 }])
   })
 
   it('disables live interpolation when reduced motion is enabled', () => {
@@ -204,7 +210,7 @@ describe('TrackMap interpolation', () => {
 
     renderTrackMap(snapshot, false, true)
 
-    expect(markerCalls).toEqual([{ animate: false, driverNumber: 4, durationMs: 900 }])
+    expect(markerCalls).toMatchObject([{ animate: false, driverNumber: 4, durationMs: 900 }])
   })
 
   it('still renders driver dots before a closed track outline exists', () => {
@@ -219,6 +225,51 @@ describe('TrackMap interpolation', () => {
 
     renderTrackMap(snapshot, false, false)
 
-    expect(markerCalls).toEqual([{ animate: true, driverNumber: 4, durationMs: 900 }])
+    expect(markerCalls).toMatchObject([{ animate: true, driverNumber: 4, durationMs: 900 }])
+  })
+
+  it('does not shrink the frame (and strand cars outside it) when the outline first appears', () => {
+    // Reproduces a real reported case: cars already tracked far from the
+    // origin suddenly rendered outside the drawn outline the moment it first
+    // appeared. Cause: the frame's sticky bounds were reset to the outline's
+    // OWN (narrower, newly-adopted) bounds instead of being unioned with
+    // whatever had already been accumulated from live car positions.
+    const farDriver = makePosition({ x: 5_000, y: 5_000 })
+
+    // Tick 1: no outline yet. Bounds accumulate from this car's real position.
+    renderTrackMap(
+      makeSnapshot({ live: true, positions: [farDriver], trackPath: [] }),
+      false,
+      false
+    )
+    const beforeOutline = markerCalls.at(-1)!
+    expect(beforeOutline.x).toBeGreaterThan(0)
+    expect(beforeOutline.x).toBeLessThan(300)
+    expect(beforeOutline.y).toBeGreaterThan(0)
+    expect(beforeOutline.y).toBeLessThan(200)
+
+    // Tick 2: a small outline near the origin — far from where this car has
+    // been the whole time — becomes available. The car must still render
+    // inside the viewBox, not snap outside it because the frame reset to fit
+    // only the new, narrower outline.
+    act(() => {
+      useSessionStore.setState({
+        snapshot: makeSnapshot({
+          live: true,
+          positions: [farDriver],
+          trackPath: [
+            { x: 0, y: 0 },
+            { x: 10, y: 10 },
+            { x: 20, y: 0 }
+          ]
+        })
+      })
+    })
+
+    const afterOutline = markerCalls.at(-1)!
+    expect(afterOutline.x).toBeGreaterThanOrEqual(0)
+    expect(afterOutline.x).toBeLessThanOrEqual(300)
+    expect(afterOutline.y).toBeGreaterThanOrEqual(0)
+    expect(afterOutline.y).toBeLessThanOrEqual(200)
   })
 })
