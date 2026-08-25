@@ -28,6 +28,8 @@ import { buildPitStopHistory } from '@renderer/core/engines/PitHistory'
 import { PitHistoryPanel } from '@renderer/widgets/driverDossier/PitHistoryPanel'
 import { useRadioPlaybackStore } from '@renderer/store/radioPlaybackStore'
 import { seekToRadioClip } from '@renderer/lib/seekToRadioClip'
+import { TranscribeAction } from '@renderer/widgets/TeamRadioPanel'
+import { isTranscriptionReady } from '@shared/ai'
 import { TyrePanel } from '@renderer/widgets/driverDossier/TyrePanel'
 import {
   BattleLine,
@@ -51,6 +53,8 @@ const SECTOR_TONE: Record<SectorTime['state'], string> = {
 function DossierRadioList({ clips }: { clips: { url: string; utc: string }[] }) {
   const playingUrl = useRadioPlaybackStore((s) => s.playingUrl)
   const togglePlayback = useRadioPlaybackStore((s) => s.toggle)
+  const ai = useSettingsStore((s) => s.ai)
+  const transcriptionOk = isTranscriptionReady(ai)
   const play = (url: string, utc: string) => {
     togglePlayback(url)
     seekToRadioClip(utc)
@@ -64,25 +68,34 @@ function DossierRadioList({ clips }: { clips: { url: string; utc: string }[] }) 
         {clips.map((clip) => {
           const isPlaying = playingUrl === clip.url
           return (
-            <button
+            <div
               key={clip.url}
-              onClick={() => play(clip.url, clip.utc)}
               className={cn(
-                'flex w-full items-center gap-2 rounded-md border px-2 py-1 text-left text-[10px] transition-colors',
+                'rounded-md border px-2 py-1 text-[10px] transition-colors',
                 isPlaying
                   ? 'border-accent/40 bg-accent/10'
                   : 'border-hairline/15 bg-black/20 hover:border-hairline/35'
               )}
             >
-              {isPlaying ? (
-                <Pause className="h-3 w-3 shrink-0 text-accent" />
-              ) : (
-                <Play className="h-3 w-3 shrink-0 text-fg-muted" />
-              )}
-              <span className="tnum ml-auto text-fg-subtle">
-                {new Date(clip.utc).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-              </span>
-            </button>
+              <button
+                type="button"
+                onClick={() => play(clip.url, clip.utc)}
+                className="flex w-full items-center gap-2 text-left"
+              >
+                {isPlaying ? (
+                  <Pause className="h-3 w-3 shrink-0 text-accent" />
+                ) : (
+                  <Play className="h-3 w-3 shrink-0 text-fg-muted" />
+                )}
+                <span className="tnum ml-auto text-fg-subtle">
+                  {new Date(clip.utc).toLocaleTimeString([], {
+                    hour: '2-digit',
+                    minute: '2-digit'
+                  })}
+                </span>
+              </button>
+              {transcriptionOk && <TranscribeAction url={clip.url} />}
+            </div>
           )
         })}
       </div>

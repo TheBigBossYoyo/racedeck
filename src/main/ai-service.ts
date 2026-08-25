@@ -3,7 +3,9 @@ import {
   type AiCompletionRequest,
   type AiCompletionResult,
   type AiConfig,
-  type AiMessage
+  type AiMessage,
+  type AiTranscriptionRequest,
+  type AiTranscriptionResult
 } from '@shared/ai'
 
 /**
@@ -142,6 +144,70 @@ export class AiService {
     return text
   }
 
+  /**
+   * Transcribe a team-radio clip via the provider's OpenAI-compatible
+   * /audio/transcriptions endpoint. Only `groq` and `openai` currently
+   * declare `supportsTranscription`; the renderer gates the UI on that flag,
+   * but this also re-checks it so a stray IPC call can't hit an endpoint
+   * that doesn't serve this route.
+   */
+  async transcribe(req: AiTranscriptionRequest): Promise<AiTranscriptionResult> {
+    const { config, audioUrl } = req
+    const meta = AI_PROVIDERS[config.provider]
+    if (!meta) return { ok: false, text: '', error: `Unknown AI provider: ${config.provider}` }
+    if (!meta.supportsTranscription || !meta.transcriptionModel) {
+      return { ok: false, text: '', error: `${meta.label} does not support transcription.` }
+    }
+    if (!config.apiKey.trim()) {
+      return {
+        ok: false,
+        text: '',
+        error: 'No API key configured. Add one in Settings → AI Race Engineer.'
+      }
+    }
+
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
+    try {
+      const audioRes = await fetch(audioUrl, { signal: controller.signal })
+      if (!audioRes.ok) {
+        return {
+          ok: false,
+          text: '',
+          error: `Could not fetch the audio clip (${audioRes.status}).`
+        }
+      }
+      const audioBlob = await audioRes.blob()
+
+      const form = new FormData()
+      form.append('file', audioBlob, 'radio.mp3')
+      form.append('model', meta.transcriptionModel)
+
+      const base = (config.baseUrl || meta.baseUrl).replace(/\/$/, '')
+      const res = await fetch(`${base}/audio/transcriptions`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${config.apiKey.trim()}` },
+        body: form,
+        signal: controller.signal
+      })
+      const json = (await res.json().catch(() => null)) as TranscriptionResponse | null
+      if (!res.ok) {
+        return { ok: false, text: '', error: this.errorText(res.status, json?.error?.message) }
+      }
+      const text = json?.text ?? ''
+      if (!text.trim()) return { ok: false, text: '', error: 'Model returned an empty transcript.' }
+      return { ok: true, text: text.trim(), error: null }
+    } catch (err) {
+      const message =
+        (err as Error)?.name === 'AbortError'
+          ? `Request timed out after ${REQUEST_TIMEOUT_MS / 1000}s.`
+          : (err as Error)?.message || 'Unknown transcription error.'
+      return { ok: false, text: '', error: message }
+    } finally {
+      clearTimeout(timeout)
+    }
+  }
+
   private errorText(status: number, providerMessage?: string): string {
     const hint =
       status === 401 || status === 403
@@ -165,6 +231,10 @@ interface GeminiResponse {
 }
 interface OpenAiResponse {
   choices?: { message?: { content?: string } }[]
+  error?: { message?: string }
+}
+interface TranscriptionResponse {
+  text?: string
   error?: { message?: string }
 }
 

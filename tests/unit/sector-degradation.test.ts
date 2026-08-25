@@ -72,6 +72,30 @@ describe('sectorDegradationTrend', () => {
     expect(result.some((s) => s.slopeSecPerLap != null)).toBe(true)
   })
 
+  it('lets sector 3 being missing on every lap still yield trends for sectors 1 and 2', () => {
+    // Old all-or-nothing filter required sector1 && sector2 && sector3 on the
+    // SAME lap, so a feed that never reports sector3 would zero out every
+    // sector's trend, not just sector 3's. Per-sector filtering should keep
+    // sectors 1 and 2 working off their own clean laps.
+    const laps = Array.from({ length: 6 }, (_, i) =>
+      lap({
+        lapNumber: i + 1,
+        lapTime: 90 + i * 0.2,
+        sector1: 30,
+        sector2: 30 + i * 0.2,
+        sector3: null
+      })
+    )
+    const result = sectorDegradationTrend(laps)
+    const s1 = result.find((s) => s.sector === 1)!
+    const s2 = result.find((s) => s.sector === 2)!
+    const s3 = result.find((s) => s.sector === 3)!
+    expect(s1.slopeSecPerLap).not.toBeNull()
+    expect(s2.slopeSecPerLap).not.toBeNull()
+    expect(s2.slopeSecPerLap!).toBeGreaterThan(0.15)
+    expect(s3.slopeSecPerLap).toBeNull()
+  })
+
   it("computes deltaToBestSec against the driver's own best sector", () => {
     const laps = Array.from({ length: 4 }, (_, i) =>
       lap({

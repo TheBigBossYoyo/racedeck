@@ -1,5 +1,10 @@
 import type { VideoMode, VideoModeState, VideoPlaybackProbe } from './models'
-import type { AiCompletionRequest, AiCompletionResult } from './ai'
+import type {
+  AiCompletionRequest,
+  AiCompletionResult,
+  AiTranscriptionRequest,
+  AiTranscriptionResult
+} from './ai'
 import type {
   MarketWinnerRequest,
   MarketWinnerResult,
@@ -57,6 +62,7 @@ export const IPC = {
 
   // ── AI Race Engineer ───────────────────────────────────────────────
   AI_COMPLETE: 'ai:complete',
+  AI_TRANSCRIBE: 'ai:transcribe',
 
   // ── Prediction market (Polymarket win odds) ────────────────────────
   MARKET_WINNER: 'market:winner',
@@ -170,6 +176,8 @@ export interface RaceDeckApi {
   ai: {
     /** Send grounded strategy context to the user's chosen AI endpoint. */
     complete(req: AiCompletionRequest): Promise<AiCompletionResult>
+    /** Transcribe a team-radio clip via the user's chosen AI endpoint. */
+    transcribe(req: AiTranscriptionRequest): Promise<AiTranscriptionResult>
   }
   market: {
     /** Public F1 win odds from Polymarket for a query or explicit event slug. */
@@ -237,5 +245,7 @@ export const STORE_NS = {
   /** Saved cross-race comparison summaries. */
   COMPARISON_LIBRARY: 'comparisonLibrary',
   /** User-authored local plugin scripts. */
-  PLUGINS: 'plugins'
+  PLUGINS: 'plugins',
+  /** Cached team-radio transcripts, keyed by clip URL. */
+  RADIO_TRANSCRIPTS: 'radioTranscripts'
 } as const

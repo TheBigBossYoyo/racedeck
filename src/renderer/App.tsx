@@ -22,6 +22,7 @@ import { WelcomeTour } from '@renderer/components/shell/WelcomeTour'
 import { useOnboardingStore } from '@renderer/store/onboardingStore'
 import { useProfileStore } from '@renderer/store/profileStore'
 import { useComparisonLibraryStore } from '@renderer/store/comparisonLibraryStore'
+import { useRadioTranscriptStore } from '@renderer/store/radioTranscriptStore'
 import { usePluginStore } from '@renderer/store/pluginStore'
 
 const ReplayView = lazy(() =>
@@ -57,6 +58,7 @@ function useBootstrap() {
         useLayoutStore.getState().hydrate(),
         useProfileStore.getState().hydrate(),
         useComparisonLibraryStore.getState().hydrate(),
+        useRadioTranscriptStore.getState().hydrate(),
         usePluginStore.getState().hydrate(),
         useAppStore.getState().init()
       ])

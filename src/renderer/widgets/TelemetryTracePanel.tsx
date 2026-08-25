@@ -4,6 +4,7 @@ import { EmptyState, TyrePill, Badge } from '@renderer/components/ui/primitives'
 import { useSessionStore } from '@renderer/store/sessionStore'
 import { Chart, gridBase, tooltipBase, cssVar } from '@renderer/lib/echarts'
 import { hexColor } from '@renderer/lib/utils'
+import { useLastGood } from '@renderer/lib/useLastGood'
 import type { EChartsCoreOption } from 'echarts/core'
 import type { AeroMode } from '@shared/models'
 
@@ -40,7 +41,7 @@ export function TelemetryTracePanel() {
     return null
   }, [focusDriver, snapshot?.timing])
 
-  const option = useMemo<EChartsCoreOption | null>(() => {
+  const rawOption = useMemo<EChartsCoreOption | null>(() => {
     if (!snapshot || !targetDriver || !snapshot.availability.telemetry) return null
 
     const driver = snapshot.drivers.find((d) => d.number === targetDriver)
@@ -52,7 +53,9 @@ export function TelemetryTracePanel() {
     if (telemetry.length === 0) return null
 
     const color = hexColor(driver.teamColour)
-    const times = telemetry.map((t) => new Date(t.date).toLocaleTimeString('en-GB', { hour12: false }))
+    const times = telemetry.map((t) =>
+      new Date(t.date).toLocaleTimeString('en-GB', { hour12: false })
+    )
     const speeds = telemetry.map((t) => t.speed ?? 0)
     const throttles = telemetry.map((t) => t.throttle ?? 0)
     const brakes = telemetry.map((t) => t.brake ?? 0)
@@ -80,8 +83,20 @@ export function TelemetryTracePanel() {
         { ...gridBase, left: 40, top: '80%', bottom: 10, height: '15%' }
       ],
       xAxis: [
-        { type: 'category', data: times, gridIndex: 0, axisLabel: { show: false }, axisTick: { show: false } },
-        { type: 'category', data: times, gridIndex: 1, axisLabel: { show: false }, axisTick: { show: false } },
+        {
+          type: 'category',
+          data: times,
+          gridIndex: 0,
+          axisLabel: { show: false },
+          axisTick: { show: false }
+        },
+        {
+          type: 'category',
+          data: times,
+          gridIndex: 1,
+          axisLabel: { show: false },
+          axisTick: { show: false }
+        },
         { type: 'category', data: times, gridIndex: 2 }
       ],
       yAxis: [
@@ -135,6 +150,8 @@ export function TelemetryTracePanel() {
     }
   }, [snapshot, getTelemetry, targetDriver])
 
+  const option = useLastGood(rawOption)
+
   // Hooks must remain unconditional: telemetry availability changes during app
   // boot and provider switches, so compute the badge before any early return.
   const currentAeroMode = useMemo<AeroMode | null>(() => {
@@ -146,7 +163,10 @@ export function TelemetryTracePanel() {
   if (!snapshot || !snapshot.availability.telemetry) {
     return (
       <WidgetFrame title="Telemetry">
-        <EmptyState title="Telemetry unavailable" hint="High-rate telemetry is not supplied by the current provider." />
+        <EmptyState
+          title="Telemetry unavailable"
+          hint="High-rate telemetry is not supplied by the current provider."
+        />
       </WidgetFrame>
     )
   }

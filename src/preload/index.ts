@@ -7,7 +7,7 @@ import {
   type SurfaceBounds
 } from '@shared/ipc-contract'
 import type { VideoModeState } from '@shared/models'
-import type { AiCompletionRequest } from '@shared/ai'
+import type { AiCompletionRequest, AiTranscriptionRequest } from '@shared/ai'
 import type { MarketWinnerRequest, MarketHistoryRequest } from '@shared/market'
 import type {
   F1SessionSummary,
@@ -61,7 +61,8 @@ const api: RaceDeckApi = {
     }
   },
   ai: {
-    complete: (req: AiCompletionRequest) => ipcRenderer.invoke(IPC.AI_COMPLETE, req)
+    complete: (req: AiCompletionRequest) => ipcRenderer.invoke(IPC.AI_COMPLETE, req),
+    transcribe: (req: AiTranscriptionRequest) => ipcRenderer.invoke(IPC.AI_TRANSCRIBE, req)
   },
   market: {
     winner: (req: MarketWinnerRequest) => ipcRenderer.invoke(IPC.MARKET_WINNER, req),

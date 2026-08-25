@@ -22,7 +22,18 @@ export interface SectorDegradationPoint {
   deltaToBestSec: number | null
 }
 
-function cleanLaps(laps: LapSample[], lastN: number): LapSample[] {
+function sectorValueOrNull(lap: LapSample, sector: 1 | 2 | 3): number | null {
+  return sector === 1 ? lap.sector1 : sector === 2 ? lap.sector2 : lap.sector3
+}
+
+/**
+ * Filtered per SECTOR, not per lap: a lap missing one sector's time (a real
+ * possibility on a live feed) still counts toward the OTHER two sectors'
+ * trends. The previous all-or-nothing filter (require all three sectors on
+ * the same lap) meant one missing sector silently zeroed out every sector's
+ * trend for that lap, not just its own.
+ */
+function cleanLaps(laps: LapSample[], lastN: number, sector: 1 | 2 | 3): LapSample[] {
   return laps
     .filter(
       (l) =>
@@ -30,16 +41,13 @@ function cleanLaps(laps: LapSample[], lastN: number): LapSample[] {
         l.lapTime > 0 &&
         !l.isPitOutLap &&
         !l.isPitInLap &&
-        l.sector1 != null &&
-        l.sector2 != null &&
-        l.sector3 != null
+        sectorValueOrNull(l, sector) != null
     )
     .slice(-lastN)
 }
 
 function sectorValue(lap: LapSample, sector: 1 | 2 | 3): number {
-  const v = sector === 1 ? lap.sector1 : sector === 2 ? lap.sector2 : lap.sector3
-  return v as number
+  return sectorValueOrNull(lap, sector) as number
 }
 
 function averageSectorShare(laps: LapSample[], sector: 1 | 2 | 3): number {
@@ -75,8 +83,8 @@ export function sectorDegradationTrend(
   coeff?: FuelCoefficient,
   bestSectorsSec: readonly [number | null, number | null, number | null] = [null, null, null]
 ): SectorDegradationPoint[] {
-  const clean = cleanLaps(laps, lastN)
   return ([1, 2, 3] as const).map((sector) => {
+    const clean = cleanLaps(laps, lastN, sector)
     if (clean.length < 3) {
       return { sector, slopeSecPerLap: null, deltaToBestSec: null }
     }

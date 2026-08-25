@@ -4,13 +4,14 @@ import { EmptyState, Segmented } from '@renderer/components/ui/primitives'
 import { useSessionStore } from '@renderer/store/sessionStore'
 import { Chart, gridBase, tooltipBase } from '@renderer/lib/echarts'
 import { hexColor, formatGap } from '@renderer/lib/utils'
+import { useLastGood } from '@renderer/lib/useLastGood'
 import type { EChartsCoreOption } from 'echarts/core'
 
 export function GapChart() {
   const snapshot = useSessionStore((s) => s.snapshot)
   const [view, setView] = useState<'leader' | 'interval'>('leader')
 
-  const option = useMemo<EChartsCoreOption | null>(() => {
+  const rawOption = useMemo<EChartsCoreOption | null>(() => {
     if (!snapshot || snapshot.timing.length === 0) return null
 
     const driverMap = new Map<number, { code: string; color: string }>()
@@ -92,6 +93,8 @@ export function GapChart() {
       ]
     }
   }, [snapshot, view])
+
+  const option = useLastGood(rawOption)
 
   if (!snapshot || snapshot.timing.length === 0 || !snapshot.availability.timing) {
     return (

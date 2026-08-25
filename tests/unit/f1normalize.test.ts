@@ -601,6 +601,21 @@ describe('buildClosedTrackPath', () => {
     if (!closed) throw new Error('Expected a closed track path.')
     expect(closed.length).toBeLessThanOrEqual(25)
   })
+
+  it('closes the lap when tracking starts mid-lap, not at the start/finish line', () => {
+    // Whoever is watching almost always connects to a session already in
+    // progress — the very first tracked position is wherever the reference
+    // car happened to be, not the start/finish line. A lap must still close
+    // once the car returns near THAT arbitrary point, without ever needing
+    // to pass the actual start/finish line at all.
+    const midLapStart = circlePoints(6000, 15, 75) // starts a quarter-lap in, one full lap later
+    const closed = buildClosedTrackPath(midLapStart)
+    expect(closed).not.toBeNull()
+    if (!closed) throw new Error('Expected a closed track path.')
+    // Closes back to the FIRST tracked point (step 15), not step 0.
+    expect(closed[0]).toEqual(closed.at(-1))
+    expect(closed.length).toBeGreaterThan(50)
+  })
 })
 
 describe('positionCoordinatesAt', () => {

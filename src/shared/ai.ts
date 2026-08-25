@@ -29,6 +29,10 @@ export interface AiProviderMeta {
   note: string
   /** Custom endpoints let the user override the base URL. */
   editableBaseUrl?: boolean
+  /** True when this provider exposes an OpenAI-compatible /audio/transcriptions endpoint. */
+  supportsTranscription?: boolean
+  /** Whisper model id to request for transcription (only meaningful when supportsTranscription). */
+  transcriptionModel?: string
 }
 
 export const AI_PROVIDERS: Record<AiProviderId, AiProviderMeta> = {
@@ -59,7 +63,9 @@ export const AI_PROVIDERS: Record<AiProviderId, AiProviderMeta> = {
     defaultModel: 'openai/gpt-oss-120b',
     models: ['openai/gpt-oss-120b', 'openai/gpt-oss-20b', 'qwen/qwen3.6-27b'],
     keyUrl: 'https://console.groq.com/keys',
-    note: 'Free and extremely fast inference of open models (GPT-OSS, Qwen). Great for live sessions.'
+    note: 'Free and extremely fast inference of open models (GPT-OSS, Qwen). Great for live sessions.',
+    supportsTranscription: true,
+    transcriptionModel: 'whisper-large-v3-turbo'
   },
   openrouter: {
     id: 'openrouter',
@@ -102,7 +108,9 @@ export const AI_PROVIDERS: Record<AiProviderId, AiProviderMeta> = {
     defaultModel: 'gpt-4o-mini',
     models: ['gpt-4o-mini', 'gpt-5.4-mini', 'gpt-5.4-nano', 'gpt-5-mini'],
     keyUrl: 'https://platform.openai.com/api-keys',
-    note: 'Paid. Reliable quality if you already have an account.'
+    note: 'Paid. Reliable quality if you already have an account.',
+    supportsTranscription: true,
+    transcriptionModel: 'whisper-1'
   },
   custom: {
     id: 'custom',
@@ -204,6 +212,24 @@ export interface AiCompletionResult {
   provider: AiProviderId
   model: string
   latencyMs: number
+}
+
+export interface AiTranscriptionRequest {
+  config: AiConfig
+  /** Absolute, publicly reachable URL of the audio clip (team radio mp3). */
+  audioUrl: string
+}
+
+export interface AiTranscriptionResult {
+  ok: boolean
+  text: string
+  error: string | null
+}
+
+/** True when the config's provider exposes transcription and is otherwise ready. */
+export function isTranscriptionReady(config: AiConfig): boolean {
+  if (!isAiConfigReady(config)) return false
+  return Boolean(AI_PROVIDERS[config.provider]?.supportsTranscription)
 }
 
 /** True when the config has everything needed to make a call. */

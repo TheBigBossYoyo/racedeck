@@ -9,7 +9,7 @@ import {
   type SetVideoModeRequest,
   type SurfaceBounds
 } from '@shared/ipc-contract'
-import type { AiCompletionRequest } from '@shared/ai'
+import type { AiCompletionRequest, AiTranscriptionRequest } from '@shared/ai'
 import type { MarketWinnerRequest, MarketHistoryRequest } from '@shared/market'
 import { APP_NAME } from '@shared/constants'
 import type { WindowManager } from '../window-manager'
@@ -128,6 +128,7 @@ export function registerIpc(deps: IpcDeps): void {
 
   // ── AI Race Engineer ───────────────────────────────────────────────
   ipcMain.handle(IPC.AI_COMPLETE, (_e, req: AiCompletionRequest) => ai.complete(req))
+  ipcMain.handle(IPC.AI_TRANSCRIBE, (_e, req: AiTranscriptionRequest) => ai.transcribe(req))
 
   // ── Prediction market (Polymarket win odds) ────────────────────────
   ipcMain.handle(IPC.MARKET_WINNER, (_e, req: MarketWinnerRequest) => market.winner(req))

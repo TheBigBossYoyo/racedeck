@@ -135,7 +135,7 @@ function buildTrendChartOption(
 ): EChartsCoreOption {
   const color = cssVar(TONE_TO_CSS_VAR[tone] ?? '--fg-subtle')
   return {
-    grid: { ...gridBase, left: 40, right: 8, top: 6, bottom: 18 },
+    grid: { ...gridBase, left: 56, right: 10, top: 10, bottom: 22 },
     tooltip: {
       ...tooltipBase,
       formatter: (params: unknown) => {
@@ -148,15 +148,19 @@ function buildTrendChartOption(
       type: 'value',
       name: 'Lap',
       nameLocation: 'middle',
-      nameGap: 14,
+      nameGap: 16,
       min: 'dataMin',
       max: 'dataMax',
-      axisLabel: { formatter: '{value}' }
+      axisLabel: { formatter: '{value}', fontSize: 9 }
     },
     yAxis: {
       type: 'value',
       scale: true,
-      axisLabel: { formatter: (val: number) => formatLapTime(val) }
+      // Fixed at 3 ticks (not echarts' default auto-count) — the plot area is
+      // compact (dossier real estate), and "1:31.800"-style labels collide
+      // into unreadable overlap once more than a handful are drawn.
+      splitNumber: 3,
+      axisLabel: { formatter: (val: number) => formatLapTime(val), fontSize: 9 }
     },
     series: [
       {
@@ -237,7 +241,7 @@ export function TyrePanel({
           <div className="mb-0.5 px-0.5 text-[9px] uppercase tracking-wide text-fg-subtle">
             Trend — fuel-corrected lap time
           </div>
-          <div className="h-16">
+          <div className="h-32">
             <Chart option={buildTrendChartOption(read.sparklineLaps, degradationTone)} />
           </div>
         </div>

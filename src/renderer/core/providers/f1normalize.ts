@@ -711,14 +711,23 @@ const MIN_CLOSED_LAP_UNITS = 30_000
  * ONE lap of the circuit, or null while the reference car has not yet driven one.
  *
  * The trace is accepted only once the car has covered a plausible lap distance
- * AND come back to where it started, so a partial download (or the opening
- * minutes of a live session) can never render a partial circuit.
+ * AND come back to a point it already passed, so a partial download (or the
+ * opening minutes of a live session) can never render a partial circuit.
  *
- * It returns the closed PREFIX, not the whole traced route. Returning everything
- * meant the outline kept every subsequent lap too — at Zandvoort the search
- * window holds about seven of them — so the map drew seven slightly different
- * racing lines on top of each other and the circuit came out as a thick scribble
- * rather than a line.
+ * Closure is checked against ANY earlier point in the trace, not just the
+ * very first one: whoever is watching usually connects mid-session, so
+ * `path[0]` is just wherever the reference car happened to be when tracking
+ * started — not the start/finish line — and may never be revisited that
+ * precisely again even after a genuine full lap. Checking every earlier
+ * point means a lap closes as soon as the car returns near ANYWHERE it has
+ * already been, which is the actual definition of "completed a lap"
+ * regardless of when tracking began.
+ *
+ * It returns the closed PREFIX (from the matched start point), not the whole
+ * traced route. Returning everything meant the outline kept every subsequent
+ * lap too — at Zandvoort the search window holds about seven of them — so the
+ * map drew seven slightly different racing lines on top of each other and the
+ * circuit came out as a thick scribble rather than a line.
  */
 export function buildClosedTrackPath(
   points: F1StreamPoint[],
@@ -740,12 +749,17 @@ export function buildClosedTrackPath(
   const median = [...steps].sort((a, b) => a - b)[steps.length >> 1]
   const closeDistance = Math.max(minDistance * 2, median * 1.5)
 
-  let travelled = 0
-  for (let i = 1; i < path.length; i++) {
-    travelled += steps[i - 1]
-    if (travelled < MIN_CLOSED_LAP_UNITS) continue
-    if (Math.hypot(path[i].x - path[0].x, path[i].y - path[0].y) <= closeDistance) {
-      return [...path.slice(0, i + 1), path[0]]
+  // Cumulative distance from path[0] to path[k], so "distance between any two
+  // points" is a subtraction rather than a re-sum per pair.
+  const cumulative = [0]
+  for (let k = 1; k < path.length; k++) cumulative.push(cumulative[k - 1] + steps[k - 1])
+
+  for (let i = 2; i < path.length; i++) {
+    for (let j = 0; j < i; j++) {
+      if (cumulative[i] - cumulative[j] < MIN_CLOSED_LAP_UNITS) continue
+      if (Math.hypot(path[i].x - path[j].x, path[i].y - path[j].y) <= closeDistance) {
+        return [...path.slice(j, i + 1), path[j]]
+      }
     }
   }
   return null
