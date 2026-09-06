@@ -5,7 +5,7 @@ import { EmptyState, Button } from '@renderer/components/ui/primitives'
 import { useSessionStore } from '@renderer/store/sessionStore'
 import { useAnnotationsStore } from '@renderer/store/annotationsStore'
 import { useFocusDriver } from '@renderer/lib/useFocusDriver'
-import { formatDuration, cn } from '@renderer/lib/utils'
+import { formatDuration, cn, EMPTY_ARRAY } from '@renderer/lib/utils'
 
 /**
  * User-authored session notes (APP_IMPROVEMENT_ROADMAP.md P3 item 34):
@@ -15,7 +15,7 @@ import { formatDuration, cn } from '@renderer/lib/utils'
 export function AnnotationsPanel() {
   const clock = useSessionStore((s) => s.clock)
   const currentLap = useSessionStore((s) => s.snapshot?.currentLap ?? null)
-  const drivers = useSessionStore((s) => s.snapshot?.drivers ?? [])
+  const drivers = useSessionStore((s) => s.snapshot?.drivers ?? EMPTY_ARRAY)
   const focusDriver = useFocusDriver()
   const annotations = useAnnotationsStore((s) => s.annotations)
   const sessionId = useAnnotationsStore((s) => s.sessionId)

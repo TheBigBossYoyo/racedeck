@@ -8,6 +8,17 @@ export function cn(...inputs: ClassValue[]): string {
   return twMerge(clsx(inputs))
 }
 
+/**
+ * Referentially-stable empty array for Zustand selector fallbacks, e.g.
+ * `useSessionStore((s) => s.snapshot?.drivers ?? EMPTY_ARRAY)`. A fresh `[]`
+ * literal there is a NEW reference on every call, which makes
+ * useSyncExternalStore see a "changed" snapshot on every render with no data
+ * loaded yet — this actually crashed the whole app (React #185, "Maximum
+ * update depth exceeded", uncaught with no error boundary above it) the one
+ * time it slipped into a component mounted unconditionally at the app root.
+ */
+export const EMPTY_ARRAY: readonly never[] = Object.freeze([])
+
 // ── Time / gap formatting ────────────────────────────────────────────────────
 
 /** 83.456 → "1:23.456". Handles sub-minute and null. */

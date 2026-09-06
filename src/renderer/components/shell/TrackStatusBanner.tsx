@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { Flag, OctagonAlert, ShieldAlert, TriangleAlert, X } from 'lucide-react'
 import { useSessionStore } from '@renderer/store/sessionStore'
-import { cn } from '@renderer/lib/utils'
+import { cn, EMPTY_ARRAY } from '@renderer/lib/utils'
 import type { TrackStatus } from '@shared/models'
 
 /**
@@ -42,7 +42,7 @@ const TONE_CLS: Record<'danger' | 'warn', string> = {
 export function TrackStatusBanner() {
   const status = useSessionStore((s) => s.snapshot?.trackStatus ?? 'UNKNOWN')
   const trackMessage = useSessionStore((s) => s.snapshot?.trackMessage ?? null)
-  const raceControl = useSessionStore((s) => s.snapshot?.raceControl ?? [])
+  const raceControl = useSessionStore((s) => s.snapshot?.raceControl ?? EMPTY_ARRAY)
   const [dismissedStatus, setDismissedStatus] = useState<TrackStatus | null>(null)
 
   useEffect(() => {

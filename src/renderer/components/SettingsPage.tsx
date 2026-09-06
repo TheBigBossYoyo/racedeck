@@ -49,7 +49,7 @@ import {
 } from '@renderer/core/engines/LayoutManager'
 import type { AlertConfig } from '@renderer/core/engines/AlertEngine'
 import { hasBridge, bridge } from '@renderer/lib/ipc'
-import { cn, hexColor } from '@renderer/lib/utils'
+import { cn, EMPTY_ARRAY, hexColor } from '@renderer/lib/utils'
 
 function Section({
   icon,
@@ -133,7 +133,7 @@ export function SettingsPage() {
     importAll
   } = useSettingsStore()
   const video = useVideoStore((s) => s.state)
-  const drivers = useSessionStore((s) => s.snapshot?.drivers ?? [])
+  const drivers = useSessionStore((s) => s.snapshot?.drivers ?? EMPTY_ARRAY)
   const catalog = useSessionStore((s) => s.catalog)
   const providerId = useSessionStore((s) => s.providerId)
   const setProvider = useSessionStore((s) => s.setProvider)
