@@ -186,6 +186,22 @@ describe('paceBattleBetween', () => {
     expect(duel.lapsToResolve).toBeNull()
   })
 
+  it('projects beyond a short fixed window when the race genuinely has that many laps left', () => {
+    // Closes in exactly 42 laps at a flat 1s/lap closing rate — more laps
+    // than an arbitrary short horizon, but well within the 55 laps actually
+    // remaining in this (typically-length) race. Used to silently return
+    // null here because the projection was capped at 40 laps regardless of
+    // how many laps the race actually had left.
+    const snap = snapshot({
+      totalLaps: 90, // currentLap stays the default 30, so 60 laps remain
+      timing: [entry(1, 1, 0), entry(2, 2, 42), entry(3, 3, 60)],
+      laps: [...stintLaps(1, [91, 91, 91, 91, 91, 91]), ...stintLaps(2, [90, 90, 90, 90, 90, 90])]
+    })
+    const duel = paceBattleBetween(snap, 1, 2)
+    expect(duel.trend).toBe('closing')
+    expect(duel.lapsToResolve).toBe(42)
+  })
+
   it('returns null lapsToResolve when the session has no laps left for it to resolve within', () => {
     const snap = snapshot({
       currentLap: 60,

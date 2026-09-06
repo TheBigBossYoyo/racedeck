@@ -1482,8 +1482,18 @@ export function paceComparison(snapshot: RaceSnapshot, driverNumber: number): Pa
 
 /** Below this magnitude a closing rate reads as noise, not a real trend (matches `paceComparison`'s threshold). */
 const PACE_DUEL_TREND_DEADBAND = 0.03
-/** Projection horizon when the session's remaining-lap count isn't known. */
-const PACE_DUEL_MAX_PROJECTION_LAPS = 40
+/**
+ * Projection horizon fallback ONLY when the session's remaining-lap count
+ * isn't known (no total-lap data — e.g. a session without a resolved lap
+ * count). When `lapsRemaining` IS known, it is used directly and uncapped:
+ * the real constraint is "does the gap close before the race ends," not an
+ * arbitrary window. This used to be `Math.min(lapsRemaining, 40)`, which
+ * silently truncated the projection to 40 laps even in a 60-70-lap race
+ * with plenty of genuine distance left — any battle developing later than
+ * that (common for a tyre-degradation-driven late-race fight) never got an
+ * ETA at all, reading as "the module doesn't predict this."
+ */
+const PACE_DUEL_MAX_PROJECTION_LAPS = 80
 
 export type PaceDuelTrend = 'closing' | 'opening' | 'stable'
 
@@ -1545,10 +1555,11 @@ function projectPaceDuelClosingLaps(
 ): number | null {
   if (gapSec == null || gapSec <= 0) return null
   if (ahead.currentPace == null || behind.currentPace == null) return null
-  const horizon =
-    lapsRemaining != null
-      ? Math.min(lapsRemaining, PACE_DUEL_MAX_PROJECTION_LAPS)
-      : PACE_DUEL_MAX_PROJECTION_LAPS
+  // Uncapped when the race's own remaining-lap count is known — that IS the
+  // real horizon (a fight can't happen after the chequered flag, but there's
+  // no reason to invent a shorter one). Only fall back to the constant when
+  // there's no lap-count data to bound the search at all.
+  const horizon = lapsRemaining ?? PACE_DUEL_MAX_PROJECTION_LAPS
   if (horizon <= 0) return null
   let remainingGap = gapSec
   for (let lap = 1; lap <= horizon; lap++) {
