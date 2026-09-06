@@ -567,7 +567,11 @@ const TRACK_STATUS: Record<string, TrackStatus> = {
 export function trackStatusAt(point: F1StreamPoint | null): TrackStatus {
   if (!point) return 'UNKNOWN'
   const s = String(rec(point.d).Status ?? '')
-  return TRACK_STATUS[s] ?? 'CLEAR'
+  // An unrecognized code must NEVER default to CLEAR — that's a false "all
+  // clear" broadcast during whatever the unrecognized state actually is,
+  // exactly backwards for a safety indicator. UNKNOWN honestly says "we
+  // don't know" instead of asserting something that might be a red flag.
+  return TRACK_STATUS[s] ?? 'UNKNOWN'
 }
 
 export function lapCountAt(point: F1StreamPoint | null): {

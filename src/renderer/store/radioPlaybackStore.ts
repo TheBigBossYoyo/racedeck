@@ -26,9 +26,18 @@ export const useRadioPlaybackStore = create<RadioPlaybackState>((set, get) => ({
     }
     const next = new Audio(url)
     const stop = () => set({ playingUrl: null, audio: null })
+    // A blocked/failed load (e.g. a CSP media-src gap, like the one that
+    // silently broke this entirely until diagnosed) used to reset state with
+    // zero trace, making "the button does nothing" look identical to "the
+    // click didn't register" — logging here means a future regression shows
+    // up in devtools instead of just looking broken.
+    const onError = () => {
+      console.error(`[radioPlaybackStore] Failed to play team radio clip: ${url}`)
+      stop()
+    }
     next.addEventListener('ended', stop)
-    next.addEventListener('error', stop)
+    next.addEventListener('error', onError)
     set({ playingUrl: url, audio: next })
-    void next.play().catch(stop)
+    void next.play().catch(onError)
   }
 }))

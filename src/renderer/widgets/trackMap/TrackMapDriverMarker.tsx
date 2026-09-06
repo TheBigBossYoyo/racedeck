@@ -130,10 +130,17 @@ export const TrackMapDriverMarker = memo(function TrackMapDriverMarker({
         />
       </g>
       {labelPlacement?.visible && (
-        <g className="pointer-events-none select-none">
+        <g
+          className="pointer-events-none select-none"
+          transform={`translate(${labelDx}, ${labelDy})`}
+          style={{
+            transition: animate ? 'transform 200ms cubic-bezier(0.25, 0.46, 0.45, 0.94)' : undefined,
+            willChange: animate ? 'transform' : undefined
+          }}
+        >
           <text
-            x={labelDx}
-            y={labelDy}
+            x={0}
+            y={0}
             textAnchor={labelPlacement.textAnchor}
             dominantBaseline="middle"
             fontSize={8}
@@ -146,8 +153,8 @@ export const TrackMapDriverMarker = memo(function TrackMapDriverMarker({
             {labelPlacement.text}
           </text>
           <text
-            x={labelDx}
-            y={labelDy}
+            x={0}
+            y={0}
             textAnchor={labelPlacement.textAnchor}
             dominantBaseline="middle"
             fontSize={8}

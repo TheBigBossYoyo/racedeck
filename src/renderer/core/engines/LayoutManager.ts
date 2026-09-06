@@ -259,18 +259,18 @@ export const LAYOUT_PRESETS: Record<LayoutId, LayoutPreset> = {
     grid: [
       P('tod-video', 0, 0, 8, 17, 4, 8),
       P('timing-tower', 8, 0, 4, 17, 3, 8),
-      P('track-map', 0, 17, 4, 9),
-      P('battle-radar', 4, 17, 4, 9, 3, 7),
-      P('race-control', 8, 17, 4, 9),
-      P('race-story', 0, 26, 4, 10, 3, 7),
-      P('gap-chart', 4, 26, 4, 10),
+      P('track-map', 0, 17, 5, 11),
+      P('battle-radar', 5, 17, 4, 9, 3, 7),
+      P('race-control', 9, 17, 3, 9),
+      P('race-story', 0, 28, 4, 10, 3, 7),
+      P('gap-chart', 4, 28, 4, 10),
       // Directly below Race Control, same column — radio is one of the most
       // important signals in a race, not something to go hunting for.
-      P('team-radio', 8, 26, 4, 9, 3, 6),
-      P('tyre-strategy', 8, 35, 4, 10),
-      P('weather', 0, 45, 3, 5),
-      P('alerts', 3, 45, 4, 5),
-      P('sync', 7, 45, 5, 5)
+      P('team-radio', 9, 28, 3, 9, 3, 6),
+      P('tyre-strategy', 9, 37, 3, 10),
+      P('weather', 0, 48, 3, 5),
+      P('alerts', 3, 48, 4, 5),
+      P('sync', 7, 48, 5, 5)
     ]
   },
   'driver-focus': {

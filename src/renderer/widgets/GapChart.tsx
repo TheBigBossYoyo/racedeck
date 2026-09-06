@@ -95,8 +95,15 @@ export function GapChart() {
   }, [snapshot, view])
 
   const option = useLastGood(rawOption)
+  // useLastGood only bridges `null` (its "missing" sentinel), not `false` —
+  // passing the raw boolean here would return `false` immediately with zero
+  // bridging, defeating the point. Map "not currently available" to `null`
+  // so a momentary drop in `availability.timing` is bridged the same way a
+  // momentary drop in `rawOption` already is, instead of bypassing the fix
+  // via this earlier gate.
+  const availabilityTiming = useLastGood(snapshot?.availability.timing ? true : null)
 
-  if (!snapshot || snapshot.timing.length === 0 || !snapshot.availability.timing) {
+  if (!snapshot || !availabilityTiming) {
     return (
       <WidgetFrame title="Gap Chart">
         <EmptyState title="No timing data" hint="Waiting for session data..." />

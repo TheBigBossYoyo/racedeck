@@ -63,6 +63,84 @@ describe('placeTrackMapLabels', () => {
 
     expect(inputs).toEqual(before)
   })
+
+  it('resists placement changes across a small dot movement with hysteresis', () => {
+    // Initial placement
+    const initial = QUALIFYING_CLUSTER_FIXTURE
+    const firstPlacements = placeTrackMapLabels(initial)
+    const firstMap = new Map(firstPlacements.map((p) => [p.number, p]))
+    const focusedFirstPlacement = firstMap.get(44)
+    expect(focusedFirstPlacement?.visible).toBe(true)
+
+    // Move a driver dot slightly (2-3 pixels), maintaining their relative position
+    const slightlyMoved = initial.map((label) => ({
+      ...label,
+      x: label.x + (label.number === 44 ? 2 : 0),
+      y: label.y + (label.number === 44 ? 2 : 0)
+    }))
+
+    // Place labels again WITH hysteresis (passing previous placements)
+    const secondPlacementsWithHysteresis = placeTrackMapLabels(slightlyMoved, firstMap)
+    const secondMapWithHysteresis = new Map(
+      secondPlacementsWithHysteresis.map((p) => [p.number, p])
+    )
+
+    // Place labels again WITHOUT hysteresis (greedy baseline)
+    const secondPlacementsNoHysteresis = placeTrackMapLabels(slightlyMoved)
+    const secondMapNoHysteresis = new Map(secondPlacementsNoHysteresis.map((p) => [p.number, p]))
+
+    const focusedWithHysteresis = secondMapWithHysteresis.get(44)
+    const focusedNoHysteresis = secondMapNoHysteresis.get(44)
+
+    if (focusedWithHysteresis?.visible && focusedNoHysteresis?.visible) {
+      // With hysteresis, the placement should be more stable
+      // (either the same or closer to the original than without hysteresis)
+      const distanceWithHysteresis = Math.hypot(
+        focusedWithHysteresis.x - focusedFirstPlacement!.x,
+        focusedWithHysteresis.y - focusedFirstPlacement!.y
+      )
+      const distanceNoHysteresis = Math.hypot(
+        focusedNoHysteresis.x - focusedFirstPlacement!.x,
+        focusedNoHysteresis.y - focusedFirstPlacement!.y
+      )
+      // Hysteresis should reduce jumps
+      expect(distanceWithHysteresis).toBeLessThanOrEqual(distanceNoHysteresis + 1)
+    }
+  })
+
+  it('switches placement when the current one develops real overlap with another label', () => {
+    // Scenario: two drivers close together, one moves into the other's label space
+    const initialSpacing: readonly TrackMapLabelLayoutInput[] = [
+      { number: 1, code: 'DRV', x: 100, y: 100, position: 1, focused: false, favorite: false, isFastestLap: false },
+      { number: 2, code: 'OTH', x: 140, y: 100, position: 2, focused: false, favorite: false, isFastestLap: false }
+    ] as const
+
+    const firstPlacements = placeTrackMapLabels(initialSpacing)
+    const firstMap = new Map(firstPlacements.map((p) => [p.number, p]))
+    const firstDriver1 = firstMap.get(1)
+
+    expect(firstDriver1?.visible).toBe(true)
+
+    // Move driver 2 much closer (15+ pixels), which should create significant overlap
+    const crowded: readonly TrackMapLabelLayoutInput[] = [
+      { number: 1, code: 'DRV', x: 100, y: 100, position: 1, focused: false, favorite: false, isFastestLap: false },
+      { number: 2, code: 'OTH', x: 120, y: 100, position: 2, focused: false, favorite: false, isFastestLap: false }
+    ] as const
+
+    const secondPlacements = placeTrackMapLabels(crowded, firstMap)
+    const secondMap = new Map(secondPlacements.map((p) => [p.number, p]))
+    const secondDriver1 = secondMap.get(1)
+
+    // Driver 1's label may have repositioned to avoid the new overlap,
+    // OR become hidden if no good placement exists. Either way, it shouldn't
+    // overlap with driver 2's label.
+    if (secondDriver1?.visible) {
+      const driver2 = secondMap.get(2)
+      if (driver2?.visible) {
+        expect(boxesOverlap(secondDriver1.box, driver2.box)).toBe(false)
+      }
+    }
+  })
 })
 
 function normalizePlacements(

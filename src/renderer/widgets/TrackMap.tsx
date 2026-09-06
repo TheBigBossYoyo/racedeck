@@ -89,6 +89,11 @@ export function TrackMap() {
   // Rolling per-driver velocity, for bounded dead-reckoning through a brief
   // live position outage (see trackMap/positionTracking.ts).
   const positionTrackRef = useRef<Map<number, PositionTrack>>(new Map())
+  // Sticky label placements to reduce jitter from the greedy search algorithm
+  // (hysteresis in placeTrackMapLabels only switches if meaningfully better).
+  const labelPlacementsRef = useRef<Map<number, ReturnType<typeof placeTrackMapLabels>[0]>>(
+    new Map()
+  )
 
   const geometry = useMemo<TrackGeometry>(() => {
     if (!snapshot) return { bounds: null, path: '', dots: [] }
@@ -232,24 +237,22 @@ export function TrackMap() {
 
   const dots = geometry.dots
   const favoriteNumbers = useMemo(() => new Set(favorites), [favorites])
-  const labelPlacements = useMemo(
-    () =>
-      new Map(
-        placeTrackMapLabels(
-          dots.map((dot) => ({
-            number: dot.number,
-            code: dot.code,
-            x: dot.x,
-            y: dot.y,
-            position: dot.position,
-            focused: focusDriver === dot.number,
-            favorite: favoriteNumbers.has(dot.number),
-            isFastestLap: dot.isFastestLap
-          }))
-        ).map((placement) => [placement.number, placement])
-      ),
-    [dots, favoriteNumbers, focusDriver]
-  )
+  const labelPlacements = useMemo(() => {
+    const inputs = dots.map((dot) => ({
+      number: dot.number,
+      code: dot.code,
+      x: dot.x,
+      y: dot.y,
+      position: dot.position,
+      focused: focusDriver === dot.number,
+      favorite: favoriteNumbers.has(dot.number),
+      isFastestLap: dot.isFastestLap
+    }))
+    const placements = placeTrackMapLabels(inputs, labelPlacementsRef.current)
+    // Update the sticky ref for next frame's hysteresis
+    labelPlacementsRef.current = new Map(placements.map((p) => [p.number, p]))
+    return new Map(placements.map((placement) => [placement.number, placement]))
+  }, [dots, favoriteNumbers, focusDriver])
   const animation = trackMapAnimationConfig({
     isLiveSnapshot,
     performanceMode,

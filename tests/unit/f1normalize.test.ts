@@ -1063,6 +1063,14 @@ describe('series readers', () => {
     expect(trackStatusAt(null)).toBe('UNKNOWN')
   })
 
+  it('trackStatusAt never defaults an unrecognized code to CLEAR', () => {
+    // A false "all clear" is the worst possible default for a safety
+    // indicator — an unrecognized/malformed code must read as UNKNOWN, not
+    // silently claim the track is clear when it might genuinely be a red flag.
+    expect(trackStatusAt({ t: 0, d: { Status: '99' } })).toBe('UNKNOWN')
+    expect(trackStatusAt({ t: 0, d: { Status: '' } })).toBe('UNKNOWN')
+  })
+
   it('lapCountAt reads current/total', () => {
     expect(lapCountAt({ t: 0, d: { CurrentLap: 12, TotalLaps: 58 } })).toEqual({
       current: 12,

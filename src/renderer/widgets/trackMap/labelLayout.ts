@@ -22,7 +22,8 @@ export {
 }
 
 export function placeTrackMapLabels(
-  labels: readonly TrackMapLabelLayoutInput[]
+  labels: readonly TrackMapLabelLayoutInput[],
+  previousPlacements?: ReadonlyMap<number, TrackMapLabelPlacement>
 ): readonly TrackMapLabelPlacement[] {
   const sortedLabels = [...labels].sort(compareTrackMapLabels)
   const markerBoxes = labels.map((label) => createMarkerBox(label))
@@ -30,7 +31,12 @@ export function placeTrackMapLabels(
   const visiblePlacements: TrackMapLabelPlacement[] = []
 
   for (const label of sortedLabels) {
-    const placement = chooseTrackMapPlacement(label, visiblePlacements, markerBoxes)
+    const placement = chooseTrackMapPlacement(
+      label,
+      visiblePlacements,
+      markerBoxes,
+      previousPlacements?.get(label.number)
+    )
     placementsByDriver.set(label.number, placement)
     if (placement.visible) {
       visiblePlacements.push(placement)
@@ -54,12 +60,14 @@ export function placeTrackMapLabels(
 function chooseTrackMapPlacement(
   label: TrackMapLabelLayoutInput,
   visiblePlacements: readonly TrackMapLabelPlacement[],
-  markerBoxes: readonly TrackMapMarkerBox[]
+  markerBoxes: readonly TrackMapMarkerBox[],
+  previousPlacement?: TrackMapLabelPlacement
 ): TrackMapLabelPlacement {
   const text = toTrackMapLabelText(label)
   const textWidth = measureTrackMapLabelWidth(text)
   const markerRadius = label.focused ? 7 : 5.5
   let bestCandidate: TrackMapPlacementCandidate | null = null
+  let previousPenalty: number | null = null
 
   for (const ringOffset of CANDIDATE_RINGS) {
     const markerGap = markerRadius + 8 + ringOffset
@@ -97,6 +105,23 @@ function chooseTrackMapPlacement(
     }
   }
 
+  // Hysteresis: if we have a previous placement, check if it's still reasonable.
+  // Only switch if the new best candidate is meaningfully better (at least 25% lower penalty).
+  if (previousPlacement && previousPlacement.visible && bestCandidate) {
+    const previousCandidateAtNewPosition = reevaluatePlacementAtNewPosition(
+      previousPlacement,
+      label,
+      visiblePlacements,
+      markerBoxes
+    )
+    previousPenalty = previousCandidateAtNewPosition
+    const hysteresisThreshold = previousPenalty * 0.75 // Require 25% improvement
+    if (previousPenalty < hysteresisThreshold && previousPenalty < Infinity) {
+      // Previous placement is still good enough; stick with it to avoid jumps
+      return previousPlacement
+    }
+  }
+
   if (bestCandidate == null) {
     return {
       number: label.number,
@@ -119,7 +144,10 @@ function chooseTrackMapPlacement(
   }
 }
 
-function compareTrackMapLabels(left: TrackMapLabelLayoutInput, right: TrackMapLabelLayoutInput): number {
+function compareTrackMapLabels(
+  left: TrackMapLabelLayoutInput,
+  right: TrackMapLabelLayoutInput
+): number {
   const priorityDelta = getTrackMapLabelPriority(right) - getTrackMapLabelPriority(left)
   if (priorityDelta !== 0) {
     return priorityDelta
@@ -144,4 +172,55 @@ function getTrackMapLabelPriority(label: TrackMapLabelLayoutInput): number {
 
 function toTrackMapLabelText(label: TrackMapLabelLayoutInput): string {
   return label.isFastestLap ? `${label.code} · FL` : label.code
+}
+
+function reevaluatePlacementAtNewPosition(
+  previousPlacement: TrackMapLabelPlacement,
+  currentLabel: TrackMapLabelLayoutInput,
+  visiblePlacements: readonly TrackMapLabelPlacement[],
+  markerBoxes: readonly TrackMapMarkerBox[]
+): number {
+  // Recalculate the penalty for the previous placement at the dot's new position.
+  // This helps us decide whether the old placement is still valid for the new dot location.
+  const textWidth = measureTrackMapLabelWidth(previousPlacement.text)
+
+  // Build a box for the previous placement at the new dot position
+  // The offset from dot to label should remain the same
+  const labelDx = previousPlacement.x - currentLabel.x
+  const labelDy = previousPlacement.y - currentLabel.y
+  const newPlacementX = currentLabel.x + labelDx
+  const newPlacementY = currentLabel.y + labelDy
+
+  const newBox = createBox({
+    x: newPlacementX,
+    y: newPlacementY,
+    width: textWidth,
+    textAnchor: previousPlacement.textAnchor
+  })
+
+  // Check bounds
+  if (
+    newBox.left < 0 ||
+    newBox.top < 0 ||
+    newBox.right > TRACK_MAP_VIEWBOX.width ||
+    newBox.bottom > TRACK_MAP_VIEWBOX.height
+  ) {
+    return Infinity
+  }
+
+  // Calculate overlap penalties
+  const labelOverlapArea = visiblePlacements.reduce(
+    (total, placement) => total + calculateOverlapArea(newBox, placement.box),
+    0
+  )
+  const markerOverlapArea = markerBoxes.reduce((total, markerBox) => {
+    if (markerBox.ownerNumber === currentLabel.number) {
+      return total
+    }
+    return total + calculateOverlapArea(newBox, markerBox.box)
+  }, 0)
+
+  // Use a small rank penalty for continuing with existing placement
+  const rank = 0.5
+  return labelOverlapArea * 1_000 + markerOverlapArea * 100 + rank
 }
