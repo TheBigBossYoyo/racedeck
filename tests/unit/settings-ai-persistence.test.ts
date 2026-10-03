@@ -1,6 +1,13 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import { STORE_NS } from '@shared/ipc-contract'
-import { AI_PROVIDERS, defaultAiConfig, migrateAiConfig } from '@shared/ai'
+import {
+  AI_PROVIDERS,
+  defaultAiConfig,
+  getAiProvider,
+  mergeImportedAi,
+  migrateAiConfig,
+  resolveAiBaseUrl
+} from '@shared/ai'
 import { persist } from '@renderer/store/persist'
 import { useSettingsStore } from '@renderer/store/settingsStore'
 
@@ -39,6 +46,60 @@ describe('AI key persistence', () => {
 
     expect(useSettingsStore.getState().ai.apiKey).toBe('secret-racedeck-key')
     expect((await persist.get<{ apiKey: string }>(STORE_NS.SETTINGS, 'ai'))?.apiKey).toBe('secret-racedeck-key')
+  })
+
+  describe('importing a backup that points at another endpoint', () => {
+    beforeEach(async () => {
+      const stored = { ...defaultAiConfig(), apiKey: 'secret-racedeck-key', enabled: true }
+      await persist.set(STORE_NS.SETTINGS, 'ai', stored)
+      useSettingsStore.setState({ ai: stored })
+    })
+
+    it('does not hand the stored key to a custom endpoint the backup introduces', async () => {
+      await useSettingsStore.getState().importAll({
+        ai: {
+          provider: 'custom',
+          baseUrl: 'https://evil.example/v1',
+          model: 'x',
+          apiKey: '',
+          enabled: true
+        }
+      })
+
+      const ai = useSettingsStore.getState().ai
+      expect(ai.baseUrl).toBe('https://evil.example/v1')
+      expect(ai.apiKey).toBe('')
+    })
+
+    it('pins a built-in provider to its own endpoint and keeps no key from another one', async () => {
+      await useSettingsStore.getState().importAll({
+        ai: {
+          provider: 'groq',
+          baseUrl: 'https://evil.example/v1',
+          model: 'openai/gpt-oss-120b',
+          apiKey: '',
+          enabled: true
+        }
+      })
+
+      const ai = useSettingsStore.getState().ai
+      expect(ai.baseUrl).toBe(AI_PROVIDERS.groq.baseUrl)
+      expect(ai.apiKey).toBe('')
+    })
+
+    it('still keeps the stored key when the backup targets the same endpoint', async () => {
+      await useSettingsStore.getState().importAll({
+        ai: { ...defaultAiConfig(), model: 'gemini-3.6-flash', apiKey: '' }
+      })
+
+      expect(useSettingsStore.getState().ai.apiKey).toBe('secret-racedeck-key')
+    })
+
+    it('survives a backup naming a provider that does not exist', async () => {
+      await expect(
+        useSettingsStore.getState().importAll({ ai: { provider: 'bogus', apiKey: '' } })
+      ).resolves.not.toThrow()
+    })
   })
 })
 
@@ -99,5 +160,27 @@ describe('migrateAiConfig', () => {
         provider: meta.id, apiKey: '', model: meta.defaultModel, baseUrl: meta.baseUrl, enabled: true
       }).model).toBe(meta.defaultModel)
     }
+  })
+})
+
+describe('provider lookups ignore inherited object properties', () => {
+  // AI_PROVIDERS is a plain object, so AI_PROVIDERS['constructor'] is truthy.
+  it.each(['constructor', 'toString', '__proto__', 'hasOwnProperty'])(
+    'mergeImportedAi falls back to the default provider for %s',
+    (provider) => {
+      const merged = mergeImportedAi({ provider: provider as never, apiKey: '' }, [])
+      expect(merged.provider).toBe(defaultAiConfig().provider)
+    }
+  )
+
+  it('resolveAiBaseUrl returns no endpoint for an unknown provider id', () => {
+    const config = { ...defaultAiConfig(), provider: 'constructor' as never }
+    expect(resolveAiBaseUrl(config)).toBe('')
+  })
+
+  it('getAiProvider only returns real providers', () => {
+    expect(getAiProvider('groq')?.id).toBe('groq')
+    expect(getAiProvider('constructor')).toBeUndefined()
+    expect(getAiProvider(42)).toBeUndefined()
   })
 })

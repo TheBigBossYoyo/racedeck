@@ -16,7 +16,13 @@ export default defineConfig({
     setupFiles: ['tests/unit/setup.ts'],
     coverage: {
       provider: 'v8',
-      include: ['src/renderer/core/**/*.ts', 'src/shared/**/*.ts'],
+      include: [
+        'src/renderer/core/**/*.ts',
+        'src/shared/**/*.ts',
+        'src/main/**/*.ts',
+        'src/renderer/store/**/*.ts',
+        'src/renderer/widgets/**/*.{ts,tsx}'
+      ],
       reporter: ['text', 'html']
     }
   }

@@ -78,7 +78,9 @@ describe('normalizeUnitsConfig', () => {
     expect(normalizeUnitsConfig({ temperature: 'f', speed: 'mph', clock: 'utc' })).toEqual({
       temperature: 'f',
       speed: 'mph',
-      clock: 'utc'
+      clock: 'utc',
+      wind: 'ms',
+      pressure: 'mbar'
     })
   })
 })

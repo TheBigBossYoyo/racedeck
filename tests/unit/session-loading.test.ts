@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SessionInfo } from '@shared/models'
 import { dataManager, useSessionStore } from '@renderer/store/sessionStore'
 import { useSyncStore } from '@renderer/store/syncStore'
+import { useAnnotationsStore } from '@renderer/store/annotationsStore'
 
 const SESSION: SessionInfo = {
   id: 'session-a',
@@ -81,6 +82,20 @@ describe('atomic session loading', () => {
     expect(useSessionStore.getState().providerId).toBe('openf1')
     expect(useSessionStore.getState().currentSession).toBeNull()
     expect(useSessionStore.getState().loadingSession).toBe(false)
+  })
+
+  it('does not partially clear other stores when the provider switch itself fails', async () => {
+    useAnnotationsStore.setState({ sessionId: 'session-a', annotations: [] })
+    useSyncStore.getState().setFollowEligible(true)
+
+    await useSessionStore.getState().setProvider('does-not-exist')
+
+    expect(useSessionStore.getState().providerId).toBe('demo')
+    expect(useSessionStore.getState().error).toMatch(/Unknown provider/)
+    // The old provider's dependent-store state must survive an atomic-switch
+    // failure intact, not be half-cleared.
+    expect(useAnnotationsStore.getState().sessionId).toBe('session-a')
+    expect(useSyncStore.getState().followEligible).toBe(true)
   })
 
   it('coalesces overlapping live reload requests', async () => {

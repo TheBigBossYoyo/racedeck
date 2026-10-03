@@ -11,6 +11,9 @@ function inputs(overrides: Partial<SystemStatusInputs> = {}): SystemStatusInputs
     drmCapable: false,
     drmReady: false,
     enrichmentIssue: null,
+    persistCorruptions: [],
+    persistRecoveredBackup: null,
+    reconnect: null,
     ...overrides
   }
 }
@@ -37,6 +40,22 @@ describe('buildSystemStatus', () => {
     expect(
       entries.some((e) => e.category === 'live-socket' && e.recoveryActionId === 'reconnect')
     ).toBe(true)
+  })
+
+  it('shows a live reconnect countdown instead of a generic error', () => {
+    const entries = buildSystemStatus(
+      inputs({
+        liveStatus: { state: 'error', detail: 'boom', subscription: false },
+        reconnect: { attempt: 2, remainingMs: 7_600 }
+      })
+    )
+    const liveSocketEntries = entries.filter((e) => e.category === 'live-socket')
+    expect(liveSocketEntries).toHaveLength(1)
+    expect(liveSocketEntries[0]).toMatchObject({
+      severity: 'warning',
+      message: 'F1 Live reconnecting in 8s… (attempt 2)',
+      recoveryActionId: 'reconnect'
+    })
   })
 
   it('classifies a rejected subscription as a sign-in issue with warning severity', () => {
@@ -88,6 +107,33 @@ describe('buildSystemStatus', () => {
     const entries = buildSystemStatus(inputs({ enrichmentIssue: 'carData: network error' }))
     const enrichment = entries.find((e) => e.category === 'telemetry-enrichment')
     expect(enrichment).toMatchObject({ severity: 'info', recoveryActionId: null })
+  })
+
+  it('surfaces corrupted persisted data as a resettable warning', () => {
+    const entries = buildSystemStatus(
+      inputs({ persistCorruptions: [{ namespace: 'layouts', key: 'saved' }] })
+    )
+    expect(entries).toContainEqual(
+      expect.objectContaining({
+        category: 'persistence',
+        severity: 'warning',
+        recoveryActionId: 'reset-corrupted-data'
+      })
+    )
+  })
+
+  it('does not flag persistence when nothing is corrupted', () => {
+    const entries = buildSystemStatus(inputs({ persistCorruptions: [] }))
+    expect(entries.some((e) => e.category === 'persistence')).toBe(false)
+  })
+
+  it('tells the user their whole settings file was reset and where the copy is', () => {
+    const backup = 'C:\\Users\\me\\AppData\\Roaming\\RaceDeck\\racedeck.corrupt-1.json'
+    const entries = buildSystemStatus(inputs({ persistRecoveredBackup: backup }))
+
+    const entry = entries.find((e) => e.category === 'persistence')
+    expect(entry).toMatchObject({ severity: 'warning', recoveryActionId: 'dismiss-persist-recovery' })
+    expect(entry?.message).toContain(backup)
   })
 
   it('surfaces an unready DRM-capable build as informational', () => {
