@@ -1,4 +1,4 @@
-# Fresh Improvement Opportunities
+| 23 | Snapshot derivation pattern | Documented | `SNAPSHOT_DERIVATION.md`. Two contract weaknesses it flagged were reproduced and fixed (`stints` identity under a gap-fill; the pit-lap index missing from the lap-cache key), plus an OpenF1 undated-lap cache bug || 20 | Circuit-specific tuning audit | Audited | `CIRCUIT_TUNING.md`: there is no per-circuit table; pit loss is measured per session. Three silent-default violations were fixed (fallback degradation marked measured, qualifying drop zone, 12-lap distance fallback). Still open: the unlabelled default pit loss, circuit-agnostic degradation bands, the win-probability positional gap floor, the Monaco-2025-only rule || 18 | Theme/unit integration for widgets | Partial | Telemetry speed, radio times and wind/pressure now follow the units settings (new `wind` and `pressure` fields); the track-temperature line uses a theme token; `performanceMode` drops the backdrop blur on `WidgetFrame` panels. Open: wind direction, and colours with no matching theme token (see `ACCESSIBILITY_AUDIT.md`) || 11 | Keyboard navigation consistency | Partial | Audited and fixed: focus rings (plus a global `:focus-visible` rule), named icon-only buttons, a combobox `CommandPalette` with focus trap and focus return, keyboard-operable `PhaseStrip`. Open: roving tabindex for `PhaseStrip` segments, an optional `aria-label` on `Segmented` || 10 | Colour-independent state audit | Partial | `ACCESSIBILITY_AUDIT.md` lists the findings; the clear-cut ones are fixed across 24 widgets. Open: focused-row tint in `TimingTower`, and states with no matching token (see the doc) || 8 | Snapshot derivation perf monitoring | Done | `DerivationTimings` ring buffers for snapshot build, fan-out and widget render, shown on the About page. No real numbers yet: run the app on a live/replay session and read them. Widget render numbers exist only in dev builds || 7 | Provider abstraction boundary | Done | New `core/model/` (snapshot, feedHealth, timeline types) and `core/normalize/` (pure helpers). Import edges: engines -> providers 28 -> 0, widgets -> providers 1 -> 0, no file-level cycles. `F1LiveProvider` takes an injected `TrackPathCacheStorage`. `tests/unit/layering.test.ts` enforces the rules. One commented allowlist entry remains (`persistTrackPathStorage.ts`, the constructor default that existing tests rely on) || 5 | Widget composition / prop drilling | Documented | `WIDGET_COMPOSITION.md`. The prop-drilling premise is mostly wrong (widgets take no props); the real cost is whole-snapshot subscriptions (29 of 34 widgets). A ranked list of consolidations is in the doc; none implemented || 4 | Critical data path test coverage | Partial | ~2,030 unit tests (from ~780 at the start of this pass): live socket, market/standings/practice services, OpenF1 provider, auth, IPC validation, layering. Coverage `include` widened in `vitest.config.ts`, but `@vitest/coverage-v8` is not installed (installing it changes `package.json`), so there are no coverage numbers or threshold yet || 2 | Schema validation for the F1 transform pipeline | Partial | Non-destructive feed validators (`f1/feedValidators.ts`, `FeedQualityTracker`) count and describe wrong-typed values for six feeds and surface them in `SystemStatus` ("Data notes" chip; a warning only for sustained drift). Output is proven byte-identical. The normalizers themselves still read through casts, and nothing is rejected or repaired |# Fresh Improvement Opportunities
 
 This audit identifies genuine new gaps and opportunities beyond the existing `APP_IMPROVEMENT_ROADMAP.md`. These are areas for strengthening the codebase's maintainability, resilience, and architectural clarity — not features in the roadmap already.
 
@@ -287,3 +287,37 @@ These 25 opportunities range from **low-effort documentation** (guides, comments
 - **High effort but foundational:** #2 (feed schema validation), #9 (memory audit), #11 (keyboard nav).
 
 Addressing the low-effort items first would pay immediate dividends in maintainability; medium-effort items strengthen resilience; high-effort items unlock the next layer of feature richness and accuracy.
+
+---
+
+## Implementation status
+
+Updated after the batch-3 and follow-up passes. "Done" means the code and its tests exist in the working tree; it does not mean the item was exercised in a packaged build.
+
+| # | Item | Status | Where |
+|---|---|---|---|
+| 1 | Error boundary for widget isolation | Done | `WidgetErrorBoundary` (auto-resets on a per-session-second key from `widgetRegistry.tsx`) plus a `RootErrorBoundary` in `App.tsx` |
+| 2 | Schema validation for the F1 transform pipeline | **Open** | Boundary validation was added for persisted/imported settings and IPC arguments, not for the feed transforms |
+| 3 | Store architecture doc | Done | `STORE_ARCHITECTURE.md` (now with §7, persistence safety) |
+| 4 | Critical data path test coverage | Partial | ~280 tests added for the live socket, market/standings/practice services, OpenF1 provider, auth, IPC validation. Coverage `include` widened in `vitest.config.ts`, but `@vitest/coverage-v8` is not installed, so there are no coverage numbers or threshold yet |
+| 5 | Widget composition / prop drilling | Open | |
+| 6 | Track map design doc | Done | `TRACK_MAP_DESIGN.md` |
+| 7 | Provider abstraction boundary | Open | Layering issues are catalogued in the architecture review (providers import a store, engines and providers import each other); no refactor yet |
+| 8 | Snapshot derivation perf monitoring | Open | Hot paths were optimised (memoised engines, single publish per poll, replay checkpoints) but no in-app instrumentation was added |
+| 9 | Memory retention audit | Partial | ERS points trimmed to the retained CarData window; retention constants shared between socket and provider; persisted track-path cache and radio transcripts bounded. Other feed topics are deliberately kept whole (they feed cumulative state) |
+| 10 | Colour-independent state audit | Open | New indicators (stale marker, pit-log "In pit", error/success messages) are icon+text |
+| 11 | Keyboard navigation consistency | Open | |
+| 12 | Per-driver stale indicators | Done | `DriverFeedTracker`, `snapshot.driverFreshness`, `DriverStaleMarker` in `TimingTower.tsx` |
+| 13 | Pit lane event log | Done | `PitEventLog.ts`, `PitEventLogPanel.tsx` (`pit-log` widget; not in any default preset) |
+| 14 | Atomic provider switching | Done | `resetSessionScopedStores()` runs on a provider switch and on a successful load |
+| 15 | Persist corruption recovery | Done | `config-recovery.ts` backs the file up **before** electron-store can overwrite it; surfaced through `persistStatusStore` and the status bar |
+| 16 | Component library guide | Done | `COMPONENT_LIBRARY.md` |
+| 17 | Engine assumptions guide | Done | `ENGINE_ASSUMPTIONS.md` |
+| 18 | Theme/unit integration for widgets | Open | `performanceMode` now drops the backdrop blur on `WidgetFrame` panels only |
+| 19 | Plugin sandbox lifecycle | Partial | A timed-out plugin worker is now terminated. **The plugin sandbox very likely cannot run in a packaged build**: the app CSP (`script-src 'self'`, no `blob:`, no `unsafe-eval`) blocks both the Blob Worker and `new Function`. The runner now reports that honestly. Whether to ship it, hide it, or bundle a real worker is a product decision |
+| 20 | Circuit-specific tuning audit | Open | |
+| 21 | Reconnect backoff | Done | `liveStore.ts`; the attempt counter was being reset by the retry itself, so delays never grew (fixed, with tests) |
+| 22 | Nullable pattern | Done | `CODING_STYLE.md` |
+| 23 | Snapshot derivation pattern | Open | |
+| 24 | Enrichment completion visibility | Done | `describeEnrichmentProgress`; session time covered vs. duration, no percentage or ETA because no total is sent |
+| 25 | Feed availability guide | Done | `FEATURE_AVAILABILITY.md` (its `file:line` references pre-date this pass and have drifted) |
