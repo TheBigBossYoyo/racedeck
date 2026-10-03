@@ -2,6 +2,14 @@
 
 RaceDeck is a desktop app for watching Formula 1 that pairs a legal video surface for TOD (the beIN streaming service) with a live timing and strategy dashboard, so you can watch the race and read the data side by side instead of switching between a stream and a stats site.
 
+![Broadcast + Data layout in the Demo Grand Prix: timing tower, track map, battle radar and race control](docs/screenshots/broadcast-data.png)
+
+The Broadcast + Data layout in the offline Demo Grand Prix. The video area on the left is where the TOD surface goes; in demo mode there is no login, so it just shows "Connecting to TOD".
+
+![Strategy Wall layout with the Pit-Now Simulator, Stint Planner and Win Probability panels](docs/screenshots/strategy-wall.png)
+
+The Strategy Wall layout, with the Pit-Now Simulator, Stint Planner, Strategy Insights and Win Probability panels reading the same demo race.
+
 ## Why I built it
 
 I wanted something like MultiViewer, but built around race strategy rather than just timing: a workspace where the pit-stop math, tyre degradation and win probability update live next to the video, and where I could add whatever panel I was missing instead of being stuck with a fixed layout. It's also an excuse to work with real F1 timing data and with Electron's less common APIs (DRM, `WebContentsView`, session partitions).
@@ -13,6 +21,7 @@ I wanted something like MultiViewer, but built around race strategy rather than 
 - Six layout presets (Broadcast + Data, Driver Focus, Strategy Wall, Qualifying Pro, Practice Lab, Minimal Watch) built from a few dozen widgets you can freely add, remove and rearrange: timing tower, track map, tyre strategy, gap/lap charts, race control, weather, and more.
 - A Pit-Now Simulator that projects what happens if a driver boxes this lap (rejoin position, gap to the leader, undercut viability), and a Stint Planner that searches 0/1/2-stop strategies over a pace-and-degradation model fitted from the event's own laps.
 - A Pace Battle panel, a Battle Radar for on-track fights, and a Race Story panel that narrates the race as it plays.
+- A field-wide Pit Event Log that lists every stop up to the current playback time and shows a dash for anything the feed did not report, instead of guessing.
 - A win-probability model (win / podium / points chance per driver) with an optional, opt-in overlay of public Polymarket odds for comparison.
 - An "AI Race Engineer" that answers strategy questions in plain language, using a provider key you supply yourself (free tiers exist for Gemini and Groq).
 - A sync system to line the dashboard up with a delayed broadcast, since TOD's video isn't frame-accurate with the timing feed.
@@ -27,6 +36,14 @@ The interesting part of the main process is `VideoSurfaceManager`. TOD is loaded
 
 All of the strategy analytics (`StrategyEngine`, `WinProbabilityEngine`, `BattleEngine`, `RaceStoryEngine`, the fuel/degradation model) are pure, deterministic functions with their own unit tests, and everything they produce is labeled as an estimate rather than presented as certain. The AI Race Engineer is built on top of the same numbers: it's given a compact summary of the current snapshot and instructed to reason only from that context, so it interprets the strategy engine's output instead of inventing lap times or gaps of its own.
 
+Recent work was mostly about making the app fail safely rather than adding screens:
+
+- Every IPC call from the renderer is validated in the main process, and only the app's own window is allowed to use the privileged bridge. External links go through an allow-list.
+- The AI API key is encrypted on disk with the operating system's `safeStorage` (DPAPI on Windows) instead of being stored as plain text. If it can't be decrypted it is treated as missing, never deleted.
+- If the settings file is corrupt, it is moved aside as a `.corrupt-<timestamp>` copy and the app starts clean rather than crashing. Settings can also be exported and imported from the Settings page.
+- Each widget sits inside its own error boundary, so one broken panel shows an error card and the rest of the dashboard keeps working.
+- The data layer was split into smaller modules (normalisation, feed-quality checks, strategy engines), and the timing tower marks drivers whose feed has gone stale.
+
 ## Running it
 
 Requires Node.js 22.12+.
@@ -36,7 +53,7 @@ npm install       # also downloads Electron the first time
 npm run dev       # starts the app with hot reload
 npm run typecheck
 npm run build
-npm test          # Vitest unit suite
+npm test          # Vitest unit suite (2119 tests in 160 files at the time of writing)
 npm run test:e2e  # Playwright (run npm run build first)
 ```
 
@@ -46,7 +63,7 @@ npm run test:e2e  # Playwright (run npm run build first)
 
 Formula 1 publishes a real-time timing feed that isn't part of any official developer program, but is public, requires no login, and is the same one tools like MultiViewer and FastF1 already build on. Replaying a past session reads that open archive directly. Following a live session over the modern SignalR endpoint gives you basic timing for free; the gated parts (live car positions, telemetry, Driver Tracker) only unlock if you sign in with your own F1 TV subscription, which you do on F1's real login page inside the app.
 
-TOD is the paid video product this pairs with, and RaceDeck deliberately does not try to get around its protections: it opens a normal, user-authenticated browser surface, lets you log in as you would in any browser, and only watches for navigation and playback events to drive its own UI. It doesn't extract stream URLs, read license keys, or store your credentials anywhere RaceDeck controls — that's handled entirely by Chromium's own session storage. RaceDeck isn't affiliated with Formula 1, TOD, beIN, OpenF1, or any AI provider, and any AI or prediction-market key/data you add is opt-in and stays local to your machine.
+TOD is the paid video product this pairs with, and RaceDeck deliberately does not try to get around its protections: it opens a normal, user-authenticated browser surface, lets you log in as you would in any browser, and only watches for navigation and playback events to drive its own UI. It doesn't extract stream URLs, read license keys, or store your credentials anywhere RaceDeck controls, and that is handled entirely by Chromium's own session storage. RaceDeck isn't affiliated with Formula 1, TOD, beIN, OpenF1, or any AI provider, and any AI or prediction-market key/data you add is opt-in and stays local to your machine.
 
 ## Limitations and what I'd add next
 
