@@ -187,6 +187,14 @@ function knownPracticeRecord(
   }
 }
 
+/** A non-2xx answer from a public data source, with the status kept for callers. */
+class PublicDataStatusError extends Error {
+  constructor(readonly status: number) {
+    super(`Public data request failed (${status}).`)
+    this.name = 'PublicDataStatusError'
+  }
+}
+
 export class PracticeService {
   private cache = new Map<string, { at: number; value: PracticeBriefResult }>()
 
@@ -198,7 +206,7 @@ export class PracticeService {
         headers: { accept: '*/*', 'user-agent': UA },
         signal: controller.signal
       })
-      if (!response.ok) throw new Error(`Public data request failed (${response.status}).`)
+      if (!response.ok) throw new PublicDataStatusError(response.status)
       return response
     } finally {
       clearTimeout(timer)
@@ -228,21 +236,34 @@ export class PracticeService {
     const cached = this.cache.get(cacheKey)
     if (cached && Date.now() - cached.at < CACHE_MS) return cached.value
 
+    // A failed source must not read as "nothing exists": remember the failure so
+    // the result says so, and skip the cache so the next request retries it.
+    let degraded = false
+    const unreachable = <T>(source: string, fallback: T) => (err: unknown): T => {
+      degraded = true
+      console.error(`[practice] ${source} unavailable:`, err)
+      return fallback
+    }
     const [swaps, upgradeResult] = await Promise.all([
-      this.driverSwaps(year, request).catch(() => []),
-      this.weekendUpgrades(year, meetingName).catch(() => ({ upgrades: [], url: null }))
+      this.driverSwaps(year, request).catch(unreachable('driver standings', [])),
+      this.weekendUpgrades(year, meetingName).catch(
+        unreachable('upgrade document', { upgrades: [], url: null })
+      )
     ])
+    const hasData = swaps.length > 0 || upgradeResult.upgrades.length > 0
     const value: PracticeBriefResult = {
       ok: true,
-      error: swaps.length === 0 && upgradeResult.upgrades.length === 0
-        ? 'No sourced driver-swap or upgrade information was found for this event.'
-        : null,
+      error: degraded
+        ? 'Some sources could not be reached, so this briefing may be incomplete.'
+        : hasData
+          ? null
+          : 'No sourced driver-swap or upgrade information was found for this event.',
       swaps,
       upgrades: upgradeResult.upgrades,
       upgradeDocumentUrl: upgradeResult.url,
       fetchedAt: new Date().toISOString()
     }
-    this.cache.set(cacheKey, { at: Date.now(), value })
+    if (!degraded) this.cache.set(cacheKey, { at: Date.now(), value })
     return value
   }
 
@@ -369,7 +390,19 @@ export class PracticeService {
     meetingName: string
   ): Promise<{ upgrades: WeekendUpgrade[]; url: string | null }> {
     const url = this.upgradeUrl(year, meetingName)
-    const response = await this.fetch(url)
+    let response: Response
+    try {
+      response = await this.fetch(url)
+    } catch (err) {
+      // The URL is derived from the meeting name and the FIA only publishes the
+      // document for some events, so 404 (and 403 from its storage layer) means
+      // "not published", the normal case, not an outage. Everything else — network
+      // errors, timeouts, 5xx — still surfaces so the briefing reads as degraded.
+      if (err instanceof PublicDataStatusError && (err.status === 404 || err.status === 403)) {
+        return { upgrades: [], url: null }
+      }
+      throw err
+    }
     const contentType = response.headers.get('content-type') ?? ''
     if (!contentType.toLowerCase().includes('pdf')) return { upgrades: [], url: null }
     validatePracticePdfLength(response.headers.get('content-length'))

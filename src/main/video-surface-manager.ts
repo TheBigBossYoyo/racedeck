@@ -1,4 +1,5 @@
 import { BrowserWindow, WebContentsView, shell, session, type Session } from 'electron'
+import { is } from '@electron-toolkit/utils'
 import type { SurfaceBounds, SetVideoModeRequest } from '@shared/ipc-contract'
 import type { VideoMode, VideoModeState, Tristate, VideoPlaybackProbe } from '@shared/models'
 import { DEFAULT_TOD_URL } from '@shared/constants'
@@ -251,6 +252,9 @@ export class VideoSurfaceManager {
   }
 
   toggleDevTools(): void {
+    // DevTools on the DRM surface has no production use and hands anyone with
+    // access to the window a console inside the TOD session.
+    if (!is.dev) return
     const wc =
       this.state.mode === 'embedded' ? this.view?.webContents : this.companion?.webContents
     if (!wc) return

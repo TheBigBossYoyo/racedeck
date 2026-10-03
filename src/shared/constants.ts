@@ -116,7 +116,7 @@ export function teamColorFor(teamName: string | null | undefined): string {
   return TEAM_COLORS[key] ?? '8A8F98'
 }
 
-/** Accent color presets for the ThemeEngine. */
+/** Accent color presets for the ThemeEngine ("r, g, b" for JS; the engine emits a space triple to CSS). */
 export const ACCENT_PRESETS: Record<string, string> = {
   cyan: '34, 211, 238',
   violet: '139, 92, 246',

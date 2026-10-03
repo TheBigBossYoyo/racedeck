@@ -1,9 +1,10 @@
-import { BrowserWindow, session, type Session } from 'electron'
+import { BrowserWindow, session, type Session, type WebContents } from 'electron'
 import {
   inspectF1Token,
   subscriptionTokenFromLoginSession,
   type F1TokenStatus
 } from '@shared/f1-subscription-token'
+import { isFormula1CookieDomain, isLoginNavigationAllowed } from './f1-hosts'
 
 /**
  * F1AuthManager — the in-app F1 TV sign-in for LIVE timing.
@@ -48,6 +49,7 @@ export class F1AuthManager {
   private win: BrowserWindow | null = null
   private capturedToken: string | null = null
   private sniffing = false
+  private sessionLocked = false
 
   private ses(): Session {
     return session.fromPartition(F1_PARTITION)
@@ -83,7 +85,7 @@ export class F1AuthManager {
     try {
       const cookies = await this.ses().cookies.get({ name: 'login-session' })
       for (const c of cookies) {
-        if (!(c.domain ?? '').includes('formula1.com')) continue
+        if (!isFormula1CookieDomain(c.domain)) continue
         const token = subscriptionTokenFromLoginSession(c.value)
         if (token) return token
       }
@@ -102,6 +104,7 @@ export class F1AuthManager {
     }
     const ses = this.ses()
     ses.setUserAgent(UA)
+    this.lockSession(ses)
     this.win = new BrowserWindow({
       width: 520,
       height: 760,
@@ -117,6 +120,7 @@ export class F1AuthManager {
       }
     })
     this.win.webContents.setUserAgent(UA)
+    this.lockNavigation(this.win.webContents)
     this.win.on('closed', () => (this.win = null))
 
     // Sign-in sets the `login-session` cookie directly, and the cookie listener
@@ -127,6 +131,35 @@ export class F1AuthManager {
     })
 
     void this.win.loadURL(LOGIN_URL, { userAgent: UA })
+  }
+
+  /** Sign-in needs no device access, so the login session is granted none. */
+  private lockSession(ses: Session): void {
+    if (this.sessionLocked) return
+    ses.setPermissionRequestHandler((_wc, _permission, callback) => callback(false))
+    ses.setPermissionCheckHandler(() => false)
+    this.sessionLocked = true
+  }
+
+  /**
+   * The login window shows REMOTE pages, so it must not be steerable to a local
+   * file, a script URL or a custom protocol handler. Navigation is limited to
+   * https (see `isLoginNavigationAllowed` for why not a host allow-list), and a
+   * popup — social sign-in opens one, sometimes as about:blank navigated
+   * afterwards — is allowed under that same rule, then locked the same way.
+   */
+  private lockNavigation(contents: WebContents): void {
+    const guard = (event: { preventDefault(): void }, url: string): void => {
+      if (isLoginNavigationAllowed(url)) return
+      event.preventDefault()
+      console.warn('[f1-auth] blocked a non-https navigation in the F1 sign-in window.')
+    }
+    contents.on('will-navigate', (event, url) => guard(event, url))
+    contents.on('will-redirect', (event, url) => guard(event, url))
+    contents.setWindowOpenHandler(({ url }) => ({
+      action: isLoginNavigationAllowed(url) ? 'allow' : 'deny'
+    }))
+    contents.on('did-create-window', (child) => this.lockNavigation(child.webContents))
   }
 
   closeLogin(): void {
@@ -158,7 +191,7 @@ export class F1AuthManager {
     let cookieHeader = ''
     try {
       const cookies = await ses.cookies.get({})
-      const relevant = cookies.filter((c) => (c.domain ?? '').includes('formula1.com'))
+      const relevant = cookies.filter((c) => isFormula1CookieDomain(c.domain))
       cookieHeader = relevant.map((c) => `${c.name}=${c.value}`).join('; ')
     } catch {
       /* ignore */

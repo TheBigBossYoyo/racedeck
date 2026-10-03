@@ -1,8 +1,10 @@
 import { BrowserWindow, shell } from 'electron'
 import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { is } from '@electron-toolkit/utils'
 import { IPC } from '@shared/ipc-contract'
 import { isSafeExternalUrl } from '@shared/video-fallback'
+import { isAppNavigation } from './ipc/trusted-sender'
 
 /**
  * WindowManager — creates and tracks the main RaceDeck window.
@@ -51,14 +53,35 @@ export class WindowManager {
       return { action: 'deny' }
     })
 
-    if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
-      void win.loadURL(process.env['ELECTRON_RENDERER_URL'])
+    const devServerUrl = is.dev ? (process.env['ELECTRON_RENDERER_URL'] ?? null) : null
+    const appFile = join(__dirname, '../renderer/index.html')
+    this.lockNavigation(win, devServerUrl, pathToFileURL(appFile).href)
+
+    if (devServerUrl) {
+      void win.loadURL(devServerUrl)
     } else {
-      void win.loadFile(join(__dirname, '../renderer/index.html'))
+      void win.loadFile(appFile)
     }
 
     this.mainWindow = win
     return win
+  }
+
+  /**
+   * The main window carries the IPC bridge, so it must only ever show the app's
+   * own document. Anything else (a stray link, a redirect, an injected
+   * `location = ...`) is stopped before it can load with the bridge attached.
+   */
+  private lockNavigation(win: BrowserWindow, devServerUrl: string | null, appFileUrl: string): void {
+    const guard = (event: { preventDefault(): void }, url: string): void => {
+      if (isAppNavigation(url, devServerUrl, appFileUrl)) return
+      event.preventDefault()
+      console.warn('[window] blocked navigation of the main window to a non-app URL.')
+    }
+    win.webContents.on('will-navigate', (event, url) => guard(event, url))
+    win.webContents.on('will-redirect', (event, url) => guard(event, url))
+    // There are no <webview>s in the app; refuse any that appear.
+    win.webContents.on('will-attach-webview', (event) => event.preventDefault())
   }
 
   focus(): void {

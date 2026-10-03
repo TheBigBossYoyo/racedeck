@@ -1,11 +1,16 @@
 import WebSocket from 'ws'
-import { inflateRawSync } from 'node:zlib'
 import type {
   F1StreamPoint,
   F1SessionSummary,
   F1LiveDataDelta,
   LiveStatus
 } from '@shared/f1live'
+import {
+  LIVE_CAPPED_TOPICS,
+  LIVE_HIGH_RATE_RETENTION,
+  LIVE_HIGH_RATE_TRIM_CHUNK
+} from '@shared/f1live'
+import { inflateZPayload } from './f1-inflate'
 import { isF1FeedLive } from '@shared/f1-session-state'
 import { deepMergeF1 } from '@shared/f1live'
 import type { F1AuthContext } from './f1-auth'
@@ -49,22 +54,16 @@ const UA = 'BestHTTP'
 /** Client keepalive ping cadence (server KeepAliveInterval default is 15s). */
 const PING_MS = 10_000
 
-/**
- * Retention ceiling for the two heavyweight telemetry topics.
+/*
+ * Retention for the two heavyweight telemetry topics (CarData, Position) is
+ * defined in `@shared/f1live` (LIVE_HIGH_RATE_*), shared with the renderer that
+ * stitches these deltas back together.
  *
- * Measured live: CarData ~292 KB/min and Position ~262 KB/min of decoded JSON —
- * together 77% of the feed's entire volume, versus ~170 KB/min for every other
- * topic combined. Both arrive at ~1 Hz, so 20,000 points is over five hours of
- * running: a full race weekend day of ACTUAL running never reaches it, and the
- * cap exists only to stop an indefinitely-open connection growing without bound.
- *
- * Only these two are capped. The remaining topics are small enough that bounding
+ * Measured live: those two are ~77% of the feed's volume (~550 KB/min of decoded
+ * JSON) versus ~170 KB/min for every other topic combined. Only they are capped:
+ * the rest feed cumulative state (timing, tyres, race control, laps), so bounding
  * them would trade real history for negligible memory.
  */
-const MAX_TELEMETRY_POINTS = 20_000
-/** Points discarded per trim, so trimming is amortised rather than per-message. */
-const TELEMETRY_TRIM_CHUNK = 2_000
-const CAPPED_TOPICS = new Set(['CarData', 'Position'])
 
 /**
  * Do we hold credentials worth presenting to F1's feed? Only the subscription
@@ -113,6 +112,8 @@ export const SUBSCRIBE_TOPICS = [
   'Position.z'
 ]
 
+const swallowSocketError = (): void => undefined
+
 export class F1LiveSocket {
   private ws: WebSocket | null = null
   private streams: Record<string, F1StreamPoint[]> = {}
@@ -138,7 +139,14 @@ export class F1LiveSocket {
   private gatedData = false
   /** True once the renderer has read a snapshot, after which streams are append-only. */
   private published = false
+  /**
+   * Bumped by every connect() and every public disconnect(). An in-flight
+   * connect() compares against it after each await, so an intentional disconnect
+   * during negotiate() cannot be followed by a WebSocket opening anyway.
+   */
   private generation = 0
+  /** Settles the connect() promise for the current websocket, if still unsettled. */
+  private settlePending: ((s: LiveStatus) => void) | null = null
   private pingTimer: ReturnType<typeof setInterval> | null = null
   private status: LiveStatus = {
     state: 'idle',
@@ -214,8 +222,14 @@ export class F1LiveSocket {
    * token can never leave the user worse off than no token at all.
    */
   async connect(ctx?: F1AuthContext): Promise<LiveStatus> {
-    this.generation++
-    this.disconnect()
+    // Tear down the previous connection (settling its pending connect()) before
+    // taking our own generation — the public disconnect() would bump it twice.
+    this.teardown()
+    const generation = ++this.generation
+    // A newer connect() or a disconnect() owns the shared state from the moment
+    // it starts; this one must not open a socket or report a failure over it
+    // after an `await`.
+    const superseded = (): boolean => generation !== this.generation
     this.streams = {}
     this.dropped = {}
     this.sessionInfo = null
@@ -238,6 +252,7 @@ export class F1LiveSocket {
     // signed-in user can never end up worse off than an anonymous one (rejection,
     // network error, or a missing token all fall through to public timing).
     let neg = await this.negotiate(ctx)
+    if (superseded()) return this.status
     if (authed && (neg.authRejected || neg.error || !neg.connectionToken)) {
       this.debug('authenticated negotiate failed — retrying anonymously', neg.error ?? `rejected=${neg.authRejected}`)
       this.patch({
@@ -246,8 +261,10 @@ export class F1LiveSocket {
           : 'subscription connect failed — falling back to public timing…'
       })
       const anon = await this.negotiate(undefined)
+      if (superseded()) return this.status
       if (anon.connectionToken && !anon.error) neg = anon
     }
+    if (superseded()) return this.status
     if (neg.error || !neg.connectionToken) {
       return this.fail(neg.error ?? 'Negotiate returned no connection token.')
     }
@@ -267,16 +284,21 @@ export class F1LiveSocket {
     this.debug('ws connect authed=', usedAuth, 'cookie?', Boolean(cookie))
     this.authed = usedAuth
 
+    if (superseded()) return this.status
     return new Promise<LiveStatus>((resolve) => {
       const ws = new WebSocket(wsUrl, { headers: wsHeaders })
       this.ws = ws
       let settled = false
-      const settle = (s: LiveStatus) => {
-        if (!settled) {
-          settled = true
-          resolve(s)
-        }
+      const settle = (s: LiveStatus): void => {
+        if (settled) return
+        settled = true
+        if (this.settlePending === settle) this.settlePending = null
+        resolve(s)
       }
+      // closeSocket() strips every listener, so a connect() that is torn down
+      // before its handshake would otherwise never resolve and the IPC call (and
+      // the renderer's busy flag) would hang. teardown() settles it through this.
+      this.settlePending = settle
 
       ws.on('open', () => {
         this.debug('ws open — sending handshake')
@@ -296,6 +318,8 @@ export class F1LiveSocket {
         this.debug('ws close', code)
         this.stopPing()
         if (this.status.state !== 'error') this.patch({ state: 'closed', detail: `closed (${code})` })
+        // A close before the handshake completed must still settle connect().
+        settle(this.status)
       })
     })
   }
@@ -436,7 +460,7 @@ export class F1LiveSocket {
     let key = topic
     if (topic.endsWith('.z')) {
       key = topic.slice(0, -2) // "CarData.z" → "CarData"
-      decoded = this.inflate(data)
+      decoded = inflateZPayload(data)
       if (decoded == null) return
     }
     // Merge SessionInfo deltas onto the keyframe so liveness/metadata stay
@@ -460,9 +484,9 @@ export class F1LiveSocket {
     if (!this.gatedData && (key === 'CarData' || key === 'Position')) this.gatedData = true
     const arr = this.streams[key] ?? []
     arr.push({ t, d: decoded })
-    if (arr.length > MAX_TELEMETRY_POINTS && CAPPED_TOPICS.has(key)) {
-      arr.splice(0, TELEMETRY_TRIM_CHUNK)
-      this.dropped[key] = (this.dropped[key] ?? 0) + TELEMETRY_TRIM_CHUNK
+    if (arr.length > LIVE_HIGH_RATE_RETENTION && LIVE_CAPPED_TOPICS.has(key)) {
+      arr.splice(0, LIVE_HIGH_RATE_TRIM_CHUNK)
+      this.dropped[key] = (this.dropped[key] ?? 0) + LIVE_HIGH_RATE_TRIM_CHUNK
       this.debug('trimmed', key, 'dropped total', this.dropped[key])
     }
     this.streams[key] = arr
@@ -502,15 +526,6 @@ export class F1LiveSocket {
     if (!added) return
     if (!appendOnly) existing.sort((a, b) => a.t - b.t)
     this.streams.WeatherData = existing
-  }
-
-  private inflate(data: unknown): unknown {
-    if (typeof data !== 'string' || !data) return null
-    try {
-      return JSON.parse(inflateRawSync(Buffer.from(data, 'base64')).toString('utf8'))
-    } catch {
-      return null
-    }
   }
 
   private currentSessionName(): string | null {
@@ -611,21 +626,34 @@ export class F1LiveSocket {
 
   private closeSocket(): void {
     this.stopPing()
-    if (this.ws) {
-      try {
-        this.ws.removeAllListeners()
-        this.ws.close()
-      } catch {
-        /* ignore */
-      }
-      this.ws = null
+    const ws = this.ws
+    this.ws = null
+    if (!ws) return
+    try {
+      ws.removeAllListeners()
+      // ws emits 'error' on the next tick when a still-CONNECTING socket is closed
+      // ("closed before the connection was established"); with no listener that is
+      // an uncaught exception in the main process.
+      ws.on('error', swallowSocketError)
+      ws.close()
+    } catch (err) {
+      console.warn('[f1live-socket] closing the websocket threw:', err)
     }
   }
 
-  disconnect(): void {
+  private teardown(): void {
     this.closeSocket()
     if (this.status.state === 'connected' || this.status.state === 'connecting') {
       this.patch({ state: 'closed', detail: 'disconnected' })
     }
+    const settle = this.settlePending
+    this.settlePending = null
+    settle?.(this.status)
+  }
+
+  /** Intentional disconnect: also cancels any connect() still awaiting negotiate. */
+  disconnect(): void {
+    this.generation++
+    this.teardown()
   }
 }

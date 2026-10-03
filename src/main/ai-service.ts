@@ -1,11 +1,13 @@
 import {
-  AI_PROVIDERS,
+  getAiProvider,
   type AiCompletionRequest,
   type AiCompletionResult,
   type AiConfig,
   type AiMessage,
   type AiTranscriptionRequest,
-  type AiTranscriptionResult
+  type AiTranscriptionResult,
+  isTrustedRadioUrl,
+  resolveAiBaseUrl
 } from '@shared/ai'
 
 /**
@@ -27,7 +29,7 @@ export class AiService {
   async complete(req: AiCompletionRequest): Promise<AiCompletionResult> {
     const started = Date.now()
     const { config } = req
-    const meta = AI_PROVIDERS[config.provider]
+    const meta = getAiProvider(config.provider)
     const result = (over: Partial<AiCompletionResult>): AiCompletionResult => ({
       ok: false,
       text: '',
@@ -67,10 +69,10 @@ export class AiService {
   // ── Gemini (generateContent) ───────────────────────────────────────────────
   private async callGemini(req: AiCompletionRequest, signal: AbortSignal): Promise<string> {
     const { config, messages, temperature = 0.4, maxTokens = 900 } = req
-    const base = (config.baseUrl || AI_PROVIDERS.gemini.baseUrl).replace(/\/$/, '')
-    const url = `${base}/models/${encodeURIComponent(config.model)}:generateContent?key=${encodeURIComponent(
-      config.apiKey
-    )}`
+    const base = resolveAiBaseUrl(config)
+    // The key travels in a header, not the query string: URLs end up in proxy and
+    // server logs, error messages and crash reports; headers do not.
+    const url = `${base}/models/${encodeURIComponent(config.model)}:generateContent`
 
     const systemText = messages
       .filter((m) => m.role === 'system')
@@ -91,7 +93,7 @@ export class AiService {
 
     const res = await fetch(url, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', 'x-goog-api-key': config.apiKey.trim() },
       body: JSON.stringify(body),
       signal
     })
@@ -103,7 +105,11 @@ export class AiService {
     if (cand?.finishReason === 'SAFETY') {
       throw new Error('The model blocked this response (safety filter).')
     }
-    const text = cand?.content?.parts?.map((p) => p.text ?? '').join('') ?? ''
+    // Explicit boundary checks past 2 levels deep (CODING_STYLE.md "Nullable
+    // data handling") — this is untrusted third-party API response shape.
+    const content = cand?.content
+    const parts = content?.parts
+    const text = (parts ?? []).map((p) => p.text ?? '').join('')
     if (!text.trim()) throw new Error('Model returned an empty response.')
     return text
   }
@@ -114,9 +120,7 @@ export class AiService {
     signal: AbortSignal
   ): Promise<string> {
     const { config, messages, temperature = 0.4, maxTokens = 900 } = req
-    const meta = AI_PROVIDERS[config.provider]
-    const base = (config.baseUrl || meta.baseUrl).replace(/\/$/, '')
-    const url = `${base}/chat/completions`
+    const url = `${resolveAiBaseUrl(config)}/chat/completions`
 
     const headers: Record<string, string> = { 'content-type': 'application/json' }
     if (config.apiKey.trim()) headers.authorization = `Bearer ${config.apiKey.trim()}`
@@ -153,7 +157,7 @@ export class AiService {
    */
   async transcribe(req: AiTranscriptionRequest): Promise<AiTranscriptionResult> {
     const { config, audioUrl } = req
-    const meta = AI_PROVIDERS[config.provider]
+    const meta = getAiProvider(config.provider)
     if (!meta) return { ok: false, text: '', error: `Unknown AI provider: ${config.provider}` }
     if (!meta.supportsTranscription || !meta.transcriptionModel) {
       return { ok: false, text: '', error: `${meta.label} does not support transcription.` }
@@ -165,11 +169,21 @@ export class AiService {
         error: 'No API key configured. Add one in Settings → AI Race Engineer.'
       }
     }
+    // The renderer supplies this URL, but the fetch runs in the privileged main
+    // process — so only official live-timing clips may be requested (no
+    // localhost / LAN / metadata hosts), and redirects off that host are refused.
+    if (!isTrustedRadioUrl(audioUrl)) {
+      return {
+        ok: false,
+        text: '',
+        error: 'Could not fetch the audio clip: it is not an official team-radio URL.'
+      }
+    }
 
     const controller = new AbortController()
     const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
     try {
-      const audioRes = await fetch(audioUrl, { signal: controller.signal })
+      const audioRes = await fetch(audioUrl, { signal: controller.signal, redirect: 'error' })
       if (!audioRes.ok) {
         return {
           ok: false,
@@ -183,8 +197,7 @@ export class AiService {
       form.append('file', audioBlob, 'radio.mp3')
       form.append('model', meta.transcriptionModel)
 
-      const base = (config.baseUrl || meta.baseUrl).replace(/\/$/, '')
-      const res = await fetch(`${base}/audio/transcriptions`, {
+      const res = await fetch(`${resolveAiBaseUrl(config)}/audio/transcriptions`, {
         method: 'POST',
         headers: { authorization: `Bearer ${config.apiKey.trim()}` },
         body: form,

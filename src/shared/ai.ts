@@ -11,7 +11,9 @@
  * the (real, deterministic) race context to the model the user chose.
  */
 
-export type AiProviderId = 'gemini' | 'groq' | 'openrouter' | 'deepseek' | 'openai' | 'custom'
+import { F1_LIVETIMING_BASE } from './f1live'
+
+export type AiProviderId ='gemini' | 'groq' | 'openrouter' | 'deepseek' | 'openai' | 'custom'
 
 export type AiRequestKind = 'gemini' | 'openai'
 
@@ -193,6 +195,98 @@ export function migrateAiConfig(config: AiConfig): AiConfig {
   return { ...config, model: replacement }
 }
 
+/**
+ * Coerce an untrusted persisted/imported value into a well-formed config. Settings and backups
+ * are JSON a user can hand-edit or a bug can corrupt; a non-string model/key would otherwise
+ * throw in `isAiConfigReady` on every Settings render, and reloading cannot repair it. An
+ * unknown provider falls back to the whole default config, since the other fields belonged to it.
+ */
+export function normalizeAiConfig(raw: unknown): AiConfig {
+  const v = typeof raw === 'object' && raw !== null && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {}
+  // A partial config with no provider is valid (defaults apply); a present-but-unknown one is not.
+  const meta = v.provider === undefined ? AI_PROVIDERS.gemini : getAiProvider(v.provider)
+  if (!meta) return defaultAiConfig()
+  return {
+    provider: meta.id,
+    apiKey: typeof v.apiKey === 'string' ? v.apiKey : '',
+    model: typeof v.model === 'string' ? v.model : meta.defaultModel,
+    baseUrl: typeof v.baseUrl === 'string' ? v.baseUrl : meta.baseUrl,
+    enabled: v.enabled === true
+  }
+}
+
+/**
+ * Looks up a provider by id. `AI_PROVIDERS` is a plain object, so indexing it
+ * with untrusted text ('constructor', 'toString', …) would return an inherited
+ * function; only its own entries count as providers.
+ */
+export function getAiProvider(id: unknown): AiProviderMeta | undefined {
+  return typeof id === 'string' && Object.hasOwn(AI_PROVIDERS, id)
+    ? AI_PROVIDERS[id as AiProviderId]
+    : undefined
+}
+
+/**
+ * The endpoint an AI request is sent to. Only providers that declare
+ * `editableBaseUrl` (custom / local) may override their built-in URL. For every
+ * other provider a stored or imported `baseUrl` is ignored, so a tampered
+ * settings file can't redirect the user's API key to a host of its choosing.
+ * Returns '' for an unknown provider.
+ */
+export function resolveAiBaseUrl(config: AiConfig): string {
+  const meta = getAiProvider(config.provider)
+  if (!meta) return ''
+  const override = meta.editableBaseUrl && typeof config.baseUrl === 'string' ? config.baseUrl.trim() : ''
+  return (override || meta.baseUrl).replace(/\/$/, '')
+}
+
+/**
+ * Build the AI config for a settings import. The API key is a secret that an
+ * export redacts, so an import without one normally keeps the stored key — but
+ * only when the imported config targets the same endpoint. Otherwise a shared
+ * settings file could point a `custom` provider at another host and have the
+ * app send it the user's real key.
+ */
+export function mergeImportedAi(
+  imported: unknown,
+  existing: readonly (AiConfig | null | undefined)[]
+): AiConfig {
+  const config = normalizeAiConfig(imported)
+  const baseUrl = resolveAiBaseUrl(config)
+  const rawKey = (imported as { apiKey?: unknown } | null)?.apiKey
+  const importedKey = typeof rawKey === 'string' ? rawKey : ''
+  const inheritedKey = existing.find(
+    (c): c is AiConfig =>
+      typeof c?.apiKey === 'string' && c.apiKey !== '' && resolveAiBaseUrl(c) === baseUrl
+  )?.apiKey
+  return migrateAiConfig({ ...config, baseUrl, apiKey: importedKey || inheritedKey || '' })
+}
+
+const RADIO_HOST = new URL(F1_LIVETIMING_BASE).hostname
+
+/**
+ * True only for an official F1 live-timing archive URL (https, exact host, no
+ * credentials or custom port). Team-radio clips are always built under
+ * `F1_LIVETIMING_BASE`, so anything else reaching the transcribe endpoint is not
+ * a clip and must not be fetched from the main process.
+ */
+export function isTrustedRadioUrl(raw: string): boolean {
+  let url: URL
+  try {
+    url = new URL(raw)
+  } catch {
+    return false
+  }
+  return (
+    url.protocol === 'https:' &&
+    url.hostname === RADIO_HOST &&
+    url.port === '' &&
+    !url.username &&
+    !url.password &&
+    url.pathname.startsWith('/static/')
+  )
+}
+
 export interface AiMessage {
   role: 'system' | 'user' | 'assistant'
   content: string
@@ -229,16 +323,18 @@ export interface AiTranscriptionResult {
 /** True when the config's provider exposes transcription and is otherwise ready. */
 export function isTranscriptionReady(config: AiConfig): boolean {
   if (!isAiConfigReady(config)) return false
-  return Boolean(AI_PROVIDERS[config.provider]?.supportsTranscription)
+  return Boolean(getAiProvider(config.provider)?.supportsTranscription)
 }
 
 /** True when the config has everything needed to make a call. */
 export function isAiConfigReady(config: AiConfig): boolean {
-  if (!config.enabled) return false
-  const meta = AI_PROVIDERS[config.provider]
+  if (config.enabled !== true) return false
+  const meta = getAiProvider(config.provider)
+  if (!meta) return false
+  const filled = (v: unknown): boolean => typeof v === 'string' && v.trim() !== ''
   const needsKey = !meta.editableBaseUrl // local/custom endpoints may not need a key
-  if (needsKey && !config.apiKey.trim()) return false
-  return Boolean(config.model.trim() && config.baseUrl.trim())
+  if (needsKey && !filled(config.apiKey)) return false
+  return filled(config.model) && filled(config.baseUrl)
 }
 
 /** Redact a key for display, keeping only a short prefix/suffix. */

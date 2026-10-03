@@ -30,7 +30,8 @@ const api: RaceDeckApi = {
     info: () => ipcRenderer.invoke(IPC.APP_INFO),
     capturePng: (defaultName?: string) => ipcRenderer.invoke(IPC.APP_CAPTURE_PNG, defaultName),
     exportDebrief: (content: string, format: DebriefFormat, defaultName?: string) =>
-      ipcRenderer.invoke(IPC.APP_EXPORT_DEBRIEF, content, format, defaultName)
+      ipcRenderer.invoke(IPC.APP_EXPORT_DEBRIEF, content, format, defaultName),
+    openExternal: (url: string) => ipcRenderer.invoke(IPC.APP_OPEN_EXTERNAL, url)
   },
   window: {
     minimize: () => ipcRenderer.send(IPC.WINDOW_MINIMIZE),
@@ -104,7 +105,8 @@ const api: RaceDeckApi = {
       ipcRenderer.invoke(IPC.STORE_SET, ns, key, value),
     delete: (ns: string, key: string) => ipcRenderer.invoke(IPC.STORE_DELETE, ns, key),
     all: (ns: string) => ipcRenderer.invoke(IPC.STORE_ALL, ns),
-    clearNamespace: (ns: string) => ipcRenderer.invoke(IPC.STORE_CLEAR_NAMESPACE, ns)
+    clearNamespace: (ns: string) => ipcRenderer.invoke(IPC.STORE_CLEAR_NAMESPACE, ns),
+    recovery: () => ipcRenderer.invoke(IPC.STORE_RECOVERY)
   }
 }
 

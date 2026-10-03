@@ -1,17 +1,17 @@
-import { ipcMain, shell, app, BrowserWindow, dialog } from 'electron'
+import {
+  ipcMain,
+  shell,
+  app,
+  BrowserWindow,
+  dialog,
+  type IpcMainEvent,
+  type IpcMainInvokeEvent
+} from 'electron'
 import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import {
-  IPC,
-  type AppInfo,
-  type CaptureResult,
-  type DebriefFormat,
-  type SetVideoModeRequest,
-  type SurfaceBounds
-} from '@shared/ipc-contract'
-import type { AiCompletionRequest, AiTranscriptionRequest } from '@shared/ai'
-import type { MarketWinnerRequest, MarketHistoryRequest } from '@shared/market'
+import { IPC, type AppInfo, type CaptureResult } from '@shared/ipc-contract'
 import { APP_NAME } from '@shared/constants'
+import { isAllowedExternalUrl } from '@shared/external-links'
 import type { WindowManager } from '../window-manager'
 import type { VideoSurfaceManager } from '../video-surface-manager'
 import type { PersistenceLayer } from '../persistence'
@@ -23,6 +23,26 @@ import type { F1LiveSocket } from '../f1-live-socket'
 import type { PracticeService } from '../practice-service'
 import type { StandingsService } from '../standings-service'
 import { validatePracticeBriefRequest } from '@shared/practice'
+import { isTrustedSender } from './trusted-sender'
+import {
+  toStorageKey,
+  validateAiCompletionRequest,
+  validateAiTranscriptionRequest,
+  validateDebriefExport,
+  validateF1LiveCursors,
+  validateF1Year,
+  validateMarketHistoryRequest,
+  validateMarketSearchQuery,
+  validateMarketWinnerRequest,
+  validateOptionalUrl,
+  validateSafeFileName,
+  validateStoreNamespace,
+  validateStoreValue,
+  validateSurfaceBounds,
+  validateUrl,
+  validateVideoSetMode,
+  validateVisible
+} from './validate'
 
 export interface IpcDeps {
   windows: WindowManager
@@ -40,12 +60,86 @@ export interface IpcDeps {
   isDev: boolean
 }
 
+type InvokeListener = (e: IpcMainInvokeEvent, ...args: unknown[]) => unknown
+type SendListener = (e: IpcMainEvent, ...args: unknown[]) => void
+
+/**
+ * Channel registration that checks WHO is calling before running any handler.
+ * Only the app's own document may use the bridge; anything else (a navigated
+ * or embedded foreign page) is refused.
+ */
+interface Binder {
+  handle(channel: string, listener: InvokeListener): void
+  on(channel: string, listener: SendListener): void
+}
+
+function senderUrl(e: IpcMainEvent | IpcMainInvokeEvent): string | null {
+  try {
+    return e.senderFrame?.url ?? null
+  } catch {
+    // The frame can be disposed between the message being sent and handled.
+    return null
+  }
+}
+
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err)
+}
+
+function createBinder(devServerUrl: string | null): Binder {
+  const trusted = (e: IpcMainEvent | IpcMainInvokeEvent): boolean =>
+    isTrustedSender(senderUrl(e), devServerUrl)
+
+  return {
+    handle(channel, listener) {
+      // async, so a validation failure is always a rejection the renderer can
+      // catch, never a synchronous throw.
+      ipcMain.handle(channel, async (e, ...args) => {
+        if (!trusted(e)) {
+          console.warn(`[ipc] ${channel} refused: untrusted sender.`)
+          throw new Error('IPC request refused: untrusted sender.')
+        }
+        return listener(e, ...args)
+      })
+    },
+    on(channel, listener) {
+      // A throw from a fire-and-forget handler is an uncaught main-process
+      // exception, so bad input is contained and logged here instead.
+      ipcMain.on(channel, (e, ...args) => {
+        if (!trusted(e)) {
+          console.warn(`[ipc] ${channel} refused: untrusted sender.`)
+          return
+        }
+        try {
+          listener(e, ...args)
+        } catch (err) {
+          console.warn(`[ipc] ${channel} ignored: ${errorMessage(err)}`)
+        }
+      })
+    }
+  }
+}
+
 /** Wire every renderer→main channel. All handlers are defensive & side-effect scoped. */
 export function registerIpc(deps: IpcDeps): void {
-  const { windows, video, store, ai, market, practice, standings, f1, f1auth, f1socket } = deps
+  // The dev server origin is only ever trusted in dev builds.
+  const devServerUrl = deps.isDev ? (process.env['ELECTRON_RENDERER_URL'] ?? null) : null
+  const bind = createBinder(devServerUrl)
 
-  // ── App / diagnostics ──────────────────────────────────────────────
-  ipcMain.handle(IPC.APP_INFO, (): AppInfo => {
+  registerAppIpc(bind, deps)
+  registerWindowIpc(bind)
+  registerVideoIpc(bind, deps.video)
+  registerAiIpc(bind, deps.ai)
+  registerMarketIpc(bind, deps.market)
+  registerInsightIpc(bind, deps.standings, deps.practice)
+  registerF1Ipc(bind, deps)
+  registerStoreIpc(bind, deps.store)
+}
+
+// ── App / diagnostics ────────────────────────────────────────────────
+
+function registerAppIpc(bind: Binder, deps: IpcDeps): void {
+  bind.handle(IPC.APP_INFO, (): AppInfo => {
     return {
       name: APP_NAME,
       version: app.getVersion(),
@@ -58,7 +152,8 @@ export function registerIpc(deps: IpcDeps): void {
     }
   })
 
-  ipcMain.handle(IPC.APP_CAPTURE_PNG, async (e, defaultName?: string): Promise<CaptureResult> => {
+  bind.handle(IPC.APP_CAPTURE_PNG, async (e, rawName): Promise<CaptureResult> => {
+    const defaultName = validateSafeFileName(rawName)
     const win = BrowserWindow.fromWebContents(e.sender)
     if (!win) return { saved: false }
     const image = await win.webContents.capturePage()
@@ -72,136 +167,175 @@ export function registerIpc(deps: IpcDeps): void {
     return { saved: true, path: filePath }
   })
 
-  ipcMain.handle(
-    IPC.APP_EXPORT_DEBRIEF,
-    async (
-      e,
-      content: string,
-      format: DebriefFormat,
-      defaultName?: string
-    ): Promise<CaptureResult> => {
-      const win = BrowserWindow.fromWebContents(e.sender)
-      if (!win) return { saved: false }
-      const extension = format === 'json' ? 'json' : 'md'
-      const { canceled, filePath } = await dialog.showSaveDialog(win, {
-        title: 'Export race debrief',
-        defaultPath: join(
-          app.getPath('documents'),
-          defaultName ?? `racedeck-debrief-${Date.now()}.${extension}`
-        ),
-        filters: [
-          format === 'json'
-            ? { name: 'JSON', extensions: ['json'] }
-            : { name: 'Markdown', extensions: ['md'] }
-        ]
-      })
-      if (canceled || !filePath) return { saved: false }
-      await writeFile(filePath, content, 'utf-8')
-      return { saved: true, path: filePath }
-    }
-  )
+  bind.handle(IPC.APP_EXPORT_DEBRIEF, async (e, rawContent, rawFormat, rawName) => {
+    const { content, format, defaultName } = validateDebriefExport(rawContent, rawFormat, rawName)
+    const win = BrowserWindow.fromWebContents(e.sender)
+    if (!win) return { saved: false }
+    const extension = format === 'json' ? 'json' : 'md'
+    const { canceled, filePath } = await dialog.showSaveDialog(win, {
+      title: 'Export race debrief',
+      defaultPath: join(
+        app.getPath('documents'),
+        defaultName ?? `racedeck-debrief-${Date.now()}.${extension}`
+      ),
+      filters: [
+        format === 'json'
+          ? { name: 'JSON', extensions: ['json'] }
+          : { name: 'Markdown', extensions: ['md'] }
+      ]
+    })
+    if (canceled || !filePath) return { saved: false }
+    await writeFile(filePath, content, 'utf-8')
+    return { saved: true, path: filePath }
+  })
 
-  // ── Window controls (frameless custom title bar) ───────────────────
-  ipcMain.on(IPC.WINDOW_MINIMIZE, (e) => BrowserWindow.fromWebContents(e.sender)?.minimize())
-  ipcMain.on(IPC.WINDOW_MAXIMIZE_TOGGLE, (e) => {
+  // The app's own outbound links (Settings "Get a key", pinned Polymarket event).
+  // Distinct from VIDEO_OPEN_EXTERNAL, which is TOD-only and rewrites anything
+  // else to the default TOD page.
+  bind.handle(IPC.APP_OPEN_EXTERNAL, async (_e, url) => {
+    if (!isAllowedExternalUrl(url)) throw new Error('External link is not allow-listed.')
+    await shell.openExternal(new URL(url).toString())
+  })
+}
+
+// ── Window controls (frameless custom title bar) ─────────────────────
+
+function registerWindowIpc(bind: Binder): void {
+  bind.on(IPC.WINDOW_MINIMIZE, (e) => BrowserWindow.fromWebContents(e.sender)?.minimize())
+  bind.on(IPC.WINDOW_MAXIMIZE_TOGGLE, (e) => {
     const win = BrowserWindow.fromWebContents(e.sender)
     if (!win) return
     if (win.isMaximized()) win.unmaximize()
     else win.maximize()
   })
-  ipcMain.on(IPC.WINDOW_CLOSE, (e) => BrowserWindow.fromWebContents(e.sender)?.close())
-  ipcMain.handle(IPC.WINDOW_IS_MAXIMIZED, (e) => {
+  bind.on(IPC.WINDOW_CLOSE, (e) => BrowserWindow.fromWebContents(e.sender)?.close())
+  bind.handle(IPC.WINDOW_IS_MAXIMIZED, (e) => {
     return BrowserWindow.fromWebContents(e.sender)?.isMaximized() ?? false
   })
+}
 
-  // ── Video surface (TOD) ────────────────────────────────────────────
-  ipcMain.handle(IPC.VIDEO_GET_STATE, () => video.getState())
-  ipcMain.handle(IPC.VIDEO_SET_MODE, (_e, req: SetVideoModeRequest) => video.setMode(req))
-  ipcMain.handle(IPC.VIDEO_SET_URL, (_e, url: string) => video.setUrl(url))
-  ipcMain.handle(IPC.VIDEO_OPEN_EXTERNAL, (_e, url?: string) => video.openExternal(url))
-  ipcMain.on(IPC.VIDEO_SET_BOUNDS, (_e, bounds: SurfaceBounds) => video.setBounds(bounds))
-  ipcMain.on(IPC.VIDEO_SET_VISIBLE, (_e, visible: boolean) => video.setVisible(visible))
-  ipcMain.on(IPC.VIDEO_RELOAD, () => video.reload())
-  ipcMain.on(IPC.VIDEO_BACK, () => video.back())
-  ipcMain.on(IPC.VIDEO_TOGGLE_DEVTOOLS, () => video.toggleDevTools())
-  ipcMain.handle(IPC.VIDEO_PROBE_PLAYBACK, () => video.probePlayback())
+// ── Video surface (TOD) ──────────────────────────────────────────────
 
-  // ── AI Race Engineer ───────────────────────────────────────────────
-  ipcMain.handle(IPC.AI_COMPLETE, (_e, req: AiCompletionRequest) => ai.complete(req))
-  ipcMain.handle(IPC.AI_TRANSCRIBE, (_e, req: AiTranscriptionRequest) => ai.transcribe(req))
+function registerVideoIpc(bind: Binder, video: VideoSurfaceManager): void {
+  bind.handle(IPC.VIDEO_GET_STATE, () => video.getState())
+  bind.handle(IPC.VIDEO_SET_MODE, (_e, req) => video.setMode(validateVideoSetMode(req)))
+  bind.handle(IPC.VIDEO_SET_URL, (_e, url) => video.setUrl(validateUrl(url)))
+  bind.handle(IPC.VIDEO_OPEN_EXTERNAL, (_e, url) => video.openExternal(validateOptionalUrl(url)))
+  bind.on(IPC.VIDEO_SET_BOUNDS, (_e, bounds) => video.setBounds(validateSurfaceBounds(bounds)))
+  bind.on(IPC.VIDEO_SET_VISIBLE, (_e, visible) => video.setVisible(validateVisible(visible)))
+  bind.on(IPC.VIDEO_RELOAD, () => video.reload())
+  bind.on(IPC.VIDEO_BACK, () => video.back())
+  bind.on(IPC.VIDEO_TOGGLE_DEVTOOLS, () => video.toggleDevTools())
+  bind.handle(IPC.VIDEO_PROBE_PLAYBACK, () => video.probePlayback())
+}
 
-  // ── Prediction market (Polymarket win odds) ────────────────────────
-  ipcMain.handle(IPC.MARKET_WINNER, (_e, req: MarketWinnerRequest) => market.winner(req))
-  ipcMain.handle(IPC.MARKET_HISTORY, (_e, req: MarketHistoryRequest) => market.history(req))
-  ipcMain.handle(IPC.MARKET_SEARCH, (_e, query: string) => market.search(query))
+// ── AI Race Engineer ─────────────────────────────────────────────────
 
-  // ── Championship standings (public Jolpica data) ───────────────────
-  ipcMain.handle(IPC.STANDINGS_SEASON, (_e, req: unknown) => standings.getChampionship(req))
+function registerAiIpc(bind: Binder, ai: AiService): void {
+  bind.handle(IPC.AI_COMPLETE, (_e, req) => ai.complete(validateAiCompletionRequest(req)))
+  bind.handle(IPC.AI_TRANSCRIBE, (_e, req) => ai.transcribe(validateAiTranscriptionRequest(req)))
+}
 
-  // ── Practice intelligence ──────────────────────────────────────────
-  ipcMain.handle(IPC.PRACTICE_BRIEFING, (_e, req: unknown) =>
+// ── Prediction market (Polymarket win odds) ──────────────────────────
+
+function registerMarketIpc(bind: Binder, market: MarketService): void {
+  bind.handle(IPC.MARKET_WINNER, (_e, req) => market.winner(validateMarketWinnerRequest(req)))
+  bind.handle(IPC.MARKET_HISTORY, (_e, req) => market.history(validateMarketHistoryRequest(req)))
+  bind.handle(IPC.MARKET_SEARCH, (_e, query) => market.search(validateMarketSearchQuery(query)))
+}
+
+// ── Championship standings + practice intelligence ───────────────────
+
+const PRACTICE_SOURCE_HOSTS: ReadonlySet<string> = new Set([
+  'api.fia.com',
+  'www.fia.com',
+  'www.fiaformula2.com',
+  'www.fiaformula3.com',
+  'www.astonmartinf1.com',
+  'www.formula1.com',
+  'superformula.net',
+  'openf1.org',
+  'api.jolpi.ca',
+  'en.wikipedia.org'
+])
+
+function registerInsightIpc(
+  bind: Binder,
+  standings: StandingsService,
+  practice: PracticeService
+): void {
+  bind.handle(IPC.STANDINGS_SEASON, (_e, req) => standings.getChampionship(req))
+  bind.handle(IPC.PRACTICE_BRIEFING, (_e, req) =>
     practice.briefing(validatePracticeBriefRequest(req))
   )
-  ipcMain.handle(IPC.PRACTICE_OPEN_SOURCE, async (_e, rawUrl: string) => {
+  bind.handle(IPC.PRACTICE_OPEN_SOURCE, async (_e, rawUrl) => {
     let url: URL
     try {
-      url = new URL(rawUrl)
+      url = new URL(rawUrl as string)
     } catch {
       throw new Error('Invalid practice source URL.')
     }
-    const allowedHosts = new Set([
-      'api.fia.com',
-      'www.fia.com',
-      'www.fiaformula2.com',
-      'www.fiaformula3.com',
-      'www.astonmartinf1.com',
-      'www.formula1.com',
-      'superformula.net',
-      'openf1.org',
-      'api.jolpi.ca',
-      'en.wikipedia.org'
-    ])
-    if (url.protocol !== 'https:' || !allowedHosts.has(url.hostname)) {
+    if (url.protocol !== 'https:' || !PRACTICE_SOURCE_HOSTS.has(url.hostname)) {
       throw new Error('Practice source is not allow-listed.')
     }
     await shell.openExternal(url.toString())
   })
+}
 
-  // ── F1 official live-timing archive ────────────────────────────────
-  ipcMain.handle(IPC.F1_LIST_SESSIONS, (_e, year: number) => f1.listSessions(year))
-  ipcMain.handle(IPC.F1_LOAD_SESSION, (_e, path: string) => f1.loadSession(path))
-  ipcMain.handle(IPC.F1_LOAD_SESSION_ENRICHMENT, (_e, req: unknown) =>
-    f1.loadSessionEnrichmentChunk(req)
-  )
+// ── F1 official live-timing archive + live timing (SignalR Core) ─────
 
-  // ── F1 live timing (SignalR Core) ──────────────────────────────────
+function registerF1Ipc(bind: Binder, deps: IpcDeps): void {
+  const { f1, f1auth, f1socket } = deps
+  bind.handle(IPC.F1_LIST_SESSIONS, (_e, year) => f1.listSessions(validateF1Year(year)))
+  bind.handle(IPC.F1_LOAD_SESSION, (_e, path) => f1.loadSession(path as string))
+  bind.handle(IPC.F1_LOAD_SESSION_ENRICHMENT, (_e, req) => f1.loadSessionEnrichmentChunk(req))
+
   // Timing is a public stream; car telemetry (CarData.z) and positions
   // (Position.z) are gated behind an F1 TV subscription, so we attach the user's
   // subscription token when they've signed in. Reading it is a cookie lookup, so
   // this no longer costs a wait.
-  ipcMain.on(IPC.F1_OPEN_LOGIN, (e) => f1auth.openLogin(BrowserWindow.fromWebContents(e.sender)))
-  ipcMain.handle(IPC.F1_LOGIN_STATUS, () => f1auth.isLoggedIn())
-  ipcMain.handle(IPC.F1_CONNECT_LIVE, async () => {
+  bind.on(IPC.F1_OPEN_LOGIN, (e) => f1auth.openLogin(BrowserWindow.fromWebContents(e.sender)))
+  bind.handle(IPC.F1_LOGIN_STATUS, () => f1auth.isLoggedIn())
+  // Bumped by every connect request and every disconnect. The socket has its own
+  // generation guard, but it only starts once connect() is called; a disconnect (or
+  // a newer connect) that lands while the auth lookup below is still pending would
+  // otherwise slip past it and re-open a feed the user just closed.
+  let liveConnectEpoch = 0
+  bind.handle(IPC.F1_CONNECT_LIVE, async () => {
+    const epoch = ++liveConnectEpoch
     const ctx = await f1auth.getAuthContext()
+    if (epoch !== liveConnectEpoch) return f1socket.getStatus()
     // The token comes straight from the cookie jar, so there is nothing to wait
     // for. (This previously blocked up to 9s opening a hidden F1 TV window to
     // sniff a token that the live feed did not even accept.)
     return f1socket.connect(ctx.hasAuth ? ctx : undefined)
   })
-  ipcMain.on(IPC.F1_DISCONNECT_LIVE, () => f1socket.disconnect())
-  ipcMain.handle(IPC.F1_LIVE_STATUS, () => f1socket.getStatus())
-  ipcMain.handle(IPC.F1_GET_LIVE, (_e, cursors?: Record<string, number>, generation?: number) =>
-    f1socket.getData(cursors, generation)
-  )
-
-  // ── Persistence ────────────────────────────────────────────────────
-  ipcMain.handle(IPC.STORE_GET, (_e, ns: string, key: string) => store.get(ns, key))
-  ipcMain.handle(IPC.STORE_SET, (_e, ns: string, key: string, value: unknown) => {
-    store.set(ns, key, value)
+  bind.on(IPC.F1_DISCONNECT_LIVE, () => {
+    liveConnectEpoch++
+    f1socket.disconnect()
   })
-  ipcMain.handle(IPC.STORE_DELETE, (_e, ns: string, key: string) => store.delete(ns, key))
-  ipcMain.handle(IPC.STORE_ALL, (_e, ns: string) => store.all(ns))
-  ipcMain.handle(IPC.STORE_CLEAR_NAMESPACE, (_e, ns: string) => store.clearNamespace(ns))
+  bind.handle(IPC.F1_LIVE_STATUS, () => f1socket.getStatus())
+  bind.handle(IPC.F1_GET_LIVE, (_e, rawCursors, rawGeneration) => {
+    const { cursors, generation } = validateF1LiveCursors(rawCursors, rawGeneration)
+    return f1socket.getData(cursors, generation)
+  })
+}
 
-  void windows
+// ── Persistence ──────────────────────────────────────────────────────
+
+function registerStoreIpc(bind: Binder, store: PersistenceLayer): void {
+  bind.handle(IPC.STORE_GET, (_e, ns, key) =>
+    store.get(validateStoreNamespace(ns), toStorageKey(key))
+  )
+  bind.handle(IPC.STORE_SET, (_e, ns, key, value) => {
+    store.set(validateStoreNamespace(ns), toStorageKey(key), validateStoreValue(value))
+  })
+  bind.handle(IPC.STORE_DELETE, (_e, ns, key) =>
+    store.delete(validateStoreNamespace(ns), toStorageKey(key))
+  )
+  bind.handle(IPC.STORE_ALL, (_e, ns) => store.all(validateStoreNamespace(ns)))
+  bind.handle(IPC.STORE_CLEAR_NAMESPACE, (_e, ns) =>
+    store.clearNamespace(validateStoreNamespace(ns))
+  )
+  bind.handle(IPC.STORE_RECOVERY, () => store.recovery)
 }

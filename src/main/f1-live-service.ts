@@ -1,4 +1,4 @@
-import { inflateRawSync } from 'node:zlib'
+import { inflateZPayload } from './f1-inflate'
 import {
   F1_LIVETIMING_BASE,
   stripBom,
@@ -612,10 +612,7 @@ export class F1LiveService {
   /** `"<base64>"` (a JSON string of zlib-raw-deflated JSON) → decoded object. */
   private inflateZ(rest: string): unknown {
     try {
-      const b64 = JSON.parse(rest) as unknown
-      if (typeof b64 !== 'string' || !b64) return null
-      const json = inflateRawSync(Buffer.from(b64, 'base64')).toString('utf8')
-      return JSON.parse(json)
+      return inflateZPayload(JSON.parse(rest) as unknown)
     } catch {
       return null
     }

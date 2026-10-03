@@ -108,7 +108,9 @@ if (!gotLock) {
         const required = widevineId ? [widevineId] : undefined
         await castlabs.whenReady(required)
         drmReady = true
-        console.log('[RaceDeck] Widevine components ready:', castlabs.status?.())
+        if (process.env.RACEDECK_DEBUG) {
+          console.log('[RaceDeck] Widevine components ready:', castlabs.status?.())
+        }
       } catch (err) {
         drmReady = false
         console.warn(

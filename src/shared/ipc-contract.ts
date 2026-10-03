@@ -41,6 +41,7 @@ export const IPC = {
   APP_INFO: 'app:info',
   APP_CAPTURE_PNG: 'app:capture-png',
   APP_EXPORT_DEBRIEF: 'app:export-debrief',
+  APP_OPEN_EXTERNAL: 'app:open-external',
   WINDOW_MINIMIZE: 'window:minimize',
   WINDOW_MAXIMIZE_TOGGLE: 'window:maximize-toggle',
   WINDOW_CLOSE: 'window:close',
@@ -95,7 +96,8 @@ export const IPC = {
   STORE_SET: 'store:set',
   STORE_DELETE: 'store:delete',
   STORE_ALL: 'store:all',
-  STORE_CLEAR_NAMESPACE: 'store:clear-namespace'
+  STORE_CLEAR_NAMESPACE: 'store:clear-namespace',
+  STORE_RECOVERY: 'store:recovery'
 } as const
 
 export interface AppInfo {
@@ -150,6 +152,12 @@ export interface RaceDeckApi {
       format: DebriefFormat,
       defaultName?: string
     ): Promise<CaptureResult>
+    /**
+     * Open one of the app's own outbound links (an AI provider's key page, the
+     * pinned Polymarket event) in the default browser. Main re-checks an https,
+     * exact-host allow-list and rejects everything else.
+     */
+    openExternal(url: string): Promise<void>
   }
   window: {
     minimize(): void
@@ -226,7 +234,14 @@ export interface RaceDeckApi {
     delete(namespace: string, key: string): Promise<void>
     all<T = Record<string, unknown>>(namespace: string): Promise<T>
     clearNamespace(namespace: string): Promise<void>
+    /** Set when the config file was unreadable at launch and was moved aside. */
+    recovery(): Promise<StoreRecovery | null>
   }
+}
+
+/** A corrupt config file the main process preserved instead of overwriting. */
+export interface StoreRecovery {
+  backupPath: string
 }
 
 /** Store namespaces used across the app (keeps keys organized in electron-store). */

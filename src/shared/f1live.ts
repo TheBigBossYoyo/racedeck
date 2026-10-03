@@ -28,6 +28,22 @@ export const F1_FEEDS = [
 
 export const F1_Z_FEEDS = ['Position.z', 'CarData.z'] as const
 
+/**
+ * Retention ceiling for the two heavyweight live telemetry topics (CarData,
+ * Position), shared by the socket that buffers them and the renderer provider
+ * that stitches them together — the two must agree or the renderer keeps points
+ * the socket has already let go of.
+ *
+ * Both arrive at ~1 Hz, so 20,000 points is over five hours of running: a full
+ * race-weekend day of ACTUAL running never reaches it, and the cap exists only to
+ * stop an indefinitely-open connection growing without bound. Every other topic
+ * is small and feeds cumulative state, so it is deliberately kept whole.
+ */
+export const LIVE_HIGH_RATE_RETENTION = 20_000
+/** Points the socket discards per trim, so trimming is amortised, not per-message. */
+export const LIVE_HIGH_RATE_TRIM_CHUNK = 2_000
+export const LIVE_CAPPED_TOPICS: ReadonlySet<string> = new Set(['CarData', 'Position'])
+
 /** CarData channel ids → meaning (the standard F1 telemetry channel map). */
 export const CAR_CHANNELS = {
   rpm: '0',
@@ -228,11 +244,11 @@ export function parseJsonStream(text: string): F1StreamPoint[] {
  * The F1 SignalR recursive merge: `patch` is applied onto `base` in place.
  * Objects merge key-by-key; anything else overwrites. This is exactly how the
  * live feed's incremental updates accumulate into a full state. Mutates and
- * returns `base`.
+ * returns `base`; never retains or mutates `patch` (values are copied in).
  */
 export function deepMergeF1(base: unknown, patch: unknown): unknown {
   if (Array.isArray(patch)) {
-    if (!Array.isArray(base)) return patch
+    if (!Array.isArray(base)) return cloneFeedValue(patch)
     const keys = Object.keys(patch).filter((key) => /^\d+$/.test(key))
     for (const key of keys) {
       const index = Number(key)
@@ -240,7 +256,7 @@ export function deepMergeF1(base: unknown, patch: unknown): unknown {
       const current = base[index]
       base[index] = isMergeable(next) && isMergeable(current)
         ? deepMergeF1(current, next)
-        : next
+        : cloneFeedValue(next)
     }
     return base
   }
@@ -256,7 +272,8 @@ export function deepMergeF1(base: unknown, patch: unknown): unknown {
       if (!/^\d+$/.test(k)) continue
       const index = Number(k)
       const current = base[index]
-      base[index] = isMergeable(v) && isMergeable(current) ? deepMergeF1(current, v) : v
+      base[index] =
+        isMergeable(v) && isMergeable(current) ? deepMergeF1(current, v) : cloneFeedValue(v)
     }
     return base
   }
@@ -279,7 +296,7 @@ export function deepMergeF1(base: unknown, patch: unknown): unknown {
     if (isMergeable(v) && isMergeable(ownValue)) {
       b[k] = deepMergeF1(ownValue, v)
     } else {
-      b[k] = v
+      b[k] = cloneFeedValue(v)
     }
   }
   return b
@@ -287,6 +304,38 @@ export function deepMergeF1(base: unknown, patch: unknown): unknown {
 
 function isMergeable(v: unknown): v is Record<string, unknown> | unknown[] {
   return Array.isArray(v) || isObject(v)
+}
+
+/**
+ * Deep copy of a feed value about to be stored in the merged state.
+ *
+ * `deepMergeF1` mutates its base in place. Storing a patch's own sub-object in
+ * the base (rather than a copy) made the base and the stream point the SAME
+ * object, so every later patch merged into it rewrote the stored point: after
+ * a preprocessing pass the first point of a feed already held the final state,
+ * and replaying from the start "remembered the future". Copying on the way in
+ * keeps stream points immutable.
+ *
+ * `__proto__` is skipped for the same reason `deepMergeF1` rejects it: a
+ * JSON-parsed feed can carry it as an own key, and assigning it would re-parent
+ * the copy. Sparse arrays keep their holes (index-addressed patches rely on it).
+ */
+function cloneFeedValue(v: unknown): unknown {
+  if (Array.isArray(v)) {
+    const copy: unknown[] = new Array(v.length)
+    for (const key of Object.keys(v)) {
+      const index = Number(key)
+      if (Number.isInteger(index)) copy[index] = cloneFeedValue(v[index])
+    }
+    return copy
+  }
+  if (!isObject(v)) return v
+  const copy: Record<string, unknown> = {}
+  for (const [k, value] of Object.entries(v)) {
+    if (k === '__proto__') continue
+    copy[k] = cloneFeedValue(value)
+  }
+  return copy
 }
 
 /**
