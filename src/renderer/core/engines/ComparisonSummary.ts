@@ -1,4 +1,4 @@
-import type { RaceSnapshot } from '@renderer/core/providers/types'
+import type { RaceSnapshot } from '@renderer/core/model/snapshot'
 import type { TyreCompound } from '@shared/models'
 import { buildPitStopHistory } from '@renderer/core/engines/PitHistory'
 import { compoundModel, teamPace } from '@renderer/core/engines/AnalyticsEngine'
@@ -38,13 +38,17 @@ function average(values: number[]): number | null {
   return values.length === 0 ? null : values.reduce((a, b) => a + b, 0) / values.length
 }
 
-/** Field-wide degradation per dry compound, only where measured this event (never the fallback estimate). */
+/**
+ * Field-wide degradation per dry compound, only where a positive slope was fitted
+ * from this event's stint laps. A compound that ran but whose slope was missing or
+ * not positive is null, never the planner's fallback figure.
+ */
 function degradationByCompound(
   snapshot: RaceSnapshot
 ): Partial<Record<TyreCompound, number | null>> {
   const out: Partial<Record<TyreCompound, number | null>> = {}
   for (const [compound, entry] of compoundModel(snapshot)) {
-    out[compound] = entry.measured ? entry.deg : null
+    out[compound] = entry.degMeasured ? entry.deg : null
   }
   return out
 }

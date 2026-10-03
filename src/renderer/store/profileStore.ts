@@ -2,12 +2,15 @@ import { create } from 'zustand'
 import type { SessionType } from '@shared/models'
 import { STORE_NS } from '@shared/ipc-contract'
 import { persist } from './persist'
-import { useSettingsStore } from './settingsStore'
+import { isRecord, writeLogged } from './persistWrite'
+import { useSettingsStore, normalizeAlertOverrides, normalizeFavorites } from './settingsStore'
 import { useLayoutStore } from './layoutStore'
 import {
   createRaceWatchProfile,
+  sanitizeAlertOverrides,
   type RaceWatchProfile
 } from '@renderer/core/engines/RaceWatchProfile'
+import { LAYOUT_PRESETS, type LayoutId } from '@renderer/core/engines/LayoutManager'
 
 /**
  * Personalized race-watch profiles (APP_IMPROVEMENT_ROADMAP.md P3 item 33).
@@ -34,6 +37,48 @@ interface ProfileState {
 
 const K = { all: 'all', autoApply: 'autoApply' }
 
+const SESSION_TYPES: readonly SessionType[] = [
+  'practice',
+  'qualifying',
+  'sprint-qualifying',
+  'sprint',
+  'race',
+  'testing',
+  'unknown'
+]
+
+function isPresetId(value: unknown): value is LayoutId {
+  return typeof value === 'string' && Object.prototype.hasOwnProperty.call(LAYOUT_PRESETS, value)
+}
+
+/**
+ * A profile missing its favourites or alert overrides is dropped rather than
+ * repaired: applying a half-empty one would wipe the user's real favourites.
+ * Critical alert keys are stripped again here, so a hand-edited file can't
+ * smuggle a "hide red flags" override past `sanitizeAlertOverrides`.
+ */
+function sanitizeProfile(sessionType: SessionType, value: unknown): RaceWatchProfile | null {
+  if (!isRecord(value)) return null
+  if (!Array.isArray(value.favoriteDrivers) || !isRecord(value.alertOverrides)) return null
+  return {
+    sessionType,
+    favoriteDrivers: normalizeFavorites(value.favoriteDrivers),
+    layoutId: isPresetId(value.layoutId) ? value.layoutId : null,
+    savedLayoutId: typeof value.savedLayoutId === 'string' ? value.savedLayoutId : null,
+    alertOverrides: sanitizeAlertOverrides(normalizeAlertOverrides(value.alertOverrides))
+  }
+}
+
+function sanitizeProfiles(raw: unknown): Partial<Record<SessionType, RaceWatchProfile>> {
+  if (!isRecord(raw)) return {}
+  const out: Partial<Record<SessionType, RaceWatchProfile>> = {}
+  for (const type of SESSION_TYPES) {
+    const profile = sanitizeProfile(type, raw[type])
+    if (profile) out[type] = profile
+  }
+  return out
+}
+
 export const useProfileStore = create<ProfileState>((set, get) => ({
   profiles: {},
   autoApply: true,
@@ -41,10 +86,14 @@ export const useProfileStore = create<ProfileState>((set, get) => ({
 
   hydrate: async () => {
     const [profiles, autoApply] = await Promise.all([
-      persist.get<Partial<Record<SessionType, RaceWatchProfile>>>(STORE_NS.PROFILES, K.all),
-      persist.get<boolean>(STORE_NS.PROFILES, K.autoApply)
+      persist.get<unknown>(STORE_NS.PROFILES, K.all),
+      persist.get<unknown>(STORE_NS.PROFILES, K.autoApply)
     ])
-    set({ profiles: profiles ?? {}, autoApply: autoApply ?? true, hydrated: true })
+    set({
+      profiles: sanitizeProfiles(profiles),
+      autoApply: typeof autoApply === 'boolean' ? autoApply : true,
+      hydrated: true
+    })
   },
 
   saveCurrentAsProfile: (sessionType) => {
@@ -59,7 +108,7 @@ export const useProfileStore = create<ProfileState>((set, get) => ({
     )
     const profiles = { ...get().profiles, [sessionType]: profile }
     set({ profiles })
-    void persist.set(STORE_NS.PROFILES, K.all, profiles)
+    writeLogged(STORE_NS.PROFILES, K.all, profiles)
   },
 
   applyProfile: (sessionType) => {
@@ -77,11 +126,11 @@ export const useProfileStore = create<ProfileState>((set, get) => ({
     const profiles = { ...get().profiles }
     delete profiles[sessionType]
     set({ profiles })
-    void persist.set(STORE_NS.PROFILES, K.all, profiles)
+    writeLogged(STORE_NS.PROFILES, K.all, profiles)
   },
 
   setAutoApply: (v) => {
     set({ autoApply: v })
-    void persist.set(STORE_NS.PROFILES, K.autoApply, v)
+    writeLogged(STORE_NS.PROFILES, K.autoApply, v)
   }
 }))

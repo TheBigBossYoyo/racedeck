@@ -1,4 +1,5 @@
 import { Profiler, type ProfilerOnRenderCallback, type ReactNode } from 'react'
+import { recordWidgetRender } from '@renderer/core/engines/DerivationTimings'
 
 /**
  * Dev-only render-cost diagnostics (APP_IMPROVEMENT_ROADMAP.md P1 item 16).
@@ -8,7 +9,9 @@ import { Profiler, type ProfilerOnRenderCallback, type ReactNode } from 'react'
  * wrapping a subtree in `<Profiler>` is already a near-zero-cost no-op in a
  * packaged build — no separate "keep it out of production" gate is needed for
  * the measurement itself. The one thing worth gating is the console logging,
- * via `import.meta.env.DEV` (statically replaced by Vite).
+ * via `import.meta.env.DEV` (statically replaced by Vite). The same callback
+ * feeds the `widgetRender` ring in DerivationTimings, so that readout is only
+ * populated in a dev build.
  *
  * Deliberately always mounting the real `<Profiler>` (not conditionally, on
  * `DEV`) keeps this testable: `onRender` still fires under Vitest, so
@@ -17,6 +20,7 @@ import { Profiler, type ProfilerOnRenderCallback, type ReactNode } from 'react'
  */
 
 export const renderProfilerOnRender: ProfilerOnRenderCallback = (id, phase, actualDuration) => {
+  recordWidgetRender(actualDuration)
   if (import.meta.env.DEV) {
     // eslint-disable-next-line no-console
     console.debug(`[render] ${id} (${phase}) ${actualDuration.toFixed(2)}ms`)

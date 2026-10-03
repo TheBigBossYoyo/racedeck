@@ -1,4 +1,5 @@
 import { hasBridge, bridge } from '@renderer/lib/ipc'
+import { usePersistStatusStore } from './persistStatusStore'
 
 /**
  * Persistence adapter used by the stores. In the Electron shell it routes to the
@@ -17,6 +18,13 @@ function ls(): Storage | null {
   }
 }
 
+/** Logs and tracks a corrupted persisted entry instead of failing silently. */
+function reportCorruption(namespace: string, key: string, error: unknown): void {
+  const message = error instanceof Error ? error.message : String(error)
+  console.error(`[persist] Corrupted JSON for ${namespace}:${key} — ${message}`)
+  usePersistStatusStore.getState().reportCorruption(namespace, key, message)
+}
+
 export const persist = {
   async get<T = unknown>(namespace: string, key: string): Promise<T | null> {
     if (hasBridge()) return bridge().store.get<T>(namespace, key)
@@ -24,7 +32,8 @@ export const persist = {
     if (raw == null) return null
     try {
       return JSON.parse(raw) as T
-    } catch {
+    } catch (e) {
+      reportCorruption(namespace, key, e)
       return null
     }
   },
@@ -60,8 +69,8 @@ export const persist = {
         if (k?.startsWith(prefix)) {
           try {
             out[k.slice(prefix.length)] = JSON.parse(store.getItem(k) as string)
-          } catch {
-            /* skip */
+          } catch (e) {
+            reportCorruption(namespace, k.slice(prefix.length), e)
           }
         }
       }
@@ -70,12 +79,35 @@ export const persist = {
       if (k.startsWith(prefix)) {
         try {
           out[k.slice(prefix.length)] = JSON.parse(v)
-        } catch {
-          /* skip */
+        } catch (e) {
+          reportCorruption(namespace, k.slice(prefix.length), e)
         }
       }
     }
     return out as T
+  },
+
+  /**
+   * In Electron the file is parsed in the main process, so a corrupt one never
+   * reaches `get`/`all`; main sets it aside at launch and this surfaces that.
+   * A failure here is logged, never thrown — it must not block app boot.
+   */
+  async checkRecovery(): Promise<void> {
+    if (!hasBridge()) return
+    try {
+      const recovery = await bridge().store.recovery()
+      if (recovery) usePersistStatusStore.getState().reportRecovery(recovery.backupPath)
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e)
+      console.error(`[persist] Could not check for a recovered config file — ${message}`)
+    }
+  },
+
+  /** Removes every entry currently flagged as corrupted and clears the warning. */
+  async resetCorrupted(): Promise<void> {
+    const corruptions = usePersistStatusStore.getState().corruptions
+    await Promise.all(corruptions.map((c) => this.remove(c.namespace, c.key)))
+    usePersistStatusStore.getState().clearAll()
   },
 
   /** Test-only: clear the in-memory fallback. */

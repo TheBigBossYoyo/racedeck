@@ -1,6 +1,11 @@
 import type { LapSample, TyreCompound } from '@shared/models'
-import type { RaceSnapshot } from '@renderer/core/providers/types'
-import { estimateFuelCoefficient, fuelCorrect, type FuelCoefficient } from './FuelModel'
+import type { RaceSnapshot } from '@renderer/core/model/snapshot'
+import {
+  estimateFuelCoefficient,
+  fuelCorrect,
+  memoizeOnLapInputs,
+  type FuelCoefficient
+} from './FuelModel'
 
 /**
  * AnalyticsEngine — pure race analytics derived ONLY from real lap data:
@@ -55,15 +60,34 @@ function slope(values: number[]): number | null {
   return den === 0 ? null : num / den
 }
 
-/** Group the snapshot's (time-bounded) laps by driver. */
-function lapsByDriver(snapshot: RaceSnapshot): Map<number, LapSample[]> {
+function groupLapsByDriver(laps: readonly LapSample[]): Map<number, LapSample[]> {
   const map = new Map<number, LapSample[]>()
-  for (const l of snapshot.laps) {
+  for (const l of laps) {
     const arr = map.get(l.driverNumber) ?? []
     arr.push(l)
     map.set(l.driverNumber, arr)
   }
   return map
+}
+
+// The providers keep the same `laps` array between lap completions (only the
+// snapshot object changes), so the grouping is cached per array identity. The
+// arrays are never mutated after they are handed out.
+const lapsByDriverCache = new WeakMap<readonly LapSample[], Map<number, LapSample[]>>()
+
+/** Group the snapshot's (time-bounded) laps by driver. Do not mutate the result. */
+function lapsByDriver(snapshot: RaceSnapshot): Map<number, LapSample[]> {
+  let grouped = lapsByDriverCache.get(snapshot.laps)
+  if (grouped == null) {
+    grouped = groupLapsByDriver(snapshot.laps)
+    lapsByDriverCache.set(snapshot.laps, grouped)
+  }
+  return grouped
+}
+
+/** One driver's laps from the (cached) per-driver grouping, in snapshot order. */
+export function driverLaps(snapshot: RaceSnapshot, driverNumber: number): readonly LapSample[] {
+  return lapsByDriver(snapshot).get(driverNumber) ?? []
 }
 
 // ── Team pace ──────────────────────────────────────────────────────────────────
@@ -155,7 +179,13 @@ function stintSlopesByCompound(snapshot: RaceSnapshot, coeff: FuelCoefficient): 
   return out
 }
 
-export function compoundPerformance(snapshot: RaceSnapshot): CompoundRow[] {
+/**
+ * Reads only laps, stints, currentLap and the fuel inputs, so it is memoised on
+ * those (see `memoizeOnLapInputs`). Rows are shared between callers: read-only.
+ */
+export const compoundPerformance = memoizeOnLapInputs(function compoundPerformance(
+  snapshot: RaceSnapshot
+): CompoundRow[] {
   const coeff = estimateFuelCoefficient(snapshot)
   // Keep raw times for the displayed best lap (a real lap time) and
   // fuel-corrected times for pace (a fair cross-race comparison).
@@ -188,7 +218,7 @@ export function compoundPerformance(snapshot: RaceSnapshot): CompoundRow[] {
   const best = rows.find((r) => r.pace != null)?.pace ?? null
   for (const r of rows) r.deltaToBest = r.pace != null && best != null ? r.pace - best : null
   return rows
-}
+})
 
 // ── Best tyre per team ───────────────────────────────────────────────────────
 
@@ -286,7 +316,16 @@ export interface CompoundModelEntry {
   pace: number
   /** Degradation (s/lap). */
   deg: number
-  /** True when derived from real laps this event; false when estimated. */
+  /** True when `pace` is derived from real laps this event. */
+  paceMeasured: boolean
+  /**
+   * True only when `deg` is a fitted, positive slope from real stint laps. False
+   * when `deg` is the `FALLBACK_DEG` figure: the compound has no laps yet, too few
+   * stint laps for a slope, or a fitted slope that is not positive (track
+   * rubbering in). The fallback number is kept so planners still have one.
+   */
+  degMeasured: boolean
+  /** True only when BOTH pace and degradation are derived from real laps. */
   measured: boolean
 }
 
@@ -296,12 +335,14 @@ export interface CompoundModelEntry {
  * compound + standard offsets) otherwise. Empty when no clean laps exist yet.
  */
 export function compoundModel(snapshot: RaceSnapshot): Map<TyreCompound, CompoundModelEntry> {
-  const measured = new Map<TyreCompound, { pace: number; deg: number }>()
+  const measured = new Map<TyreCompound, { pace: number; deg: number; degMeasured: boolean }>()
   for (const r of compoundPerformance(snapshot)) {
     if (r.pace != null) {
+      const degMeasured = r.degPerLap != null && r.degPerLap > 0
       measured.set(r.compound, {
         pace: r.pace,
-        deg: r.degPerLap != null && r.degPerLap > 0 ? r.degPerLap : FALLBACK_DEG[r.compound]
+        deg: degMeasured ? (r.degPerLap as number) : FALLBACK_DEG[r.compound],
+        degMeasured
       })
     }
   }
@@ -314,10 +355,24 @@ export function compoundModel(snapshot: RaceSnapshot): Map<TyreCompound, Compoun
   for (const c of dry) {
     const m = measured.get(c)
     if (m) {
-      model.set(c, { compound: c, pace: m.pace, deg: m.deg, measured: true })
+      model.set(c, {
+        compound: c,
+        pace: m.pace,
+        deg: m.deg,
+        paceMeasured: true,
+        degMeasured: m.degMeasured,
+        measured: m.degMeasured
+      })
     } else if (anchor) {
       const base = anchor.pace - DRY_OFFSET[anchor.compound]
-      model.set(c, { compound: c, pace: base + DRY_OFFSET[c], deg: FALLBACK_DEG[c], measured: false })
+      model.set(c, {
+        compound: c,
+        pace: base + DRY_OFFSET[c],
+        deg: FALLBACK_DEG[c],
+        paceMeasured: false,
+        degMeasured: false,
+        measured: false
+      })
     }
   }
   return model

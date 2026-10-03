@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { RaceSnapshot } from '@renderer/core/providers/types'
+import type { RaceSnapshot } from '@renderer/core/model/snapshot'
 import { AlertEngine, type AlertConfig, type AlertEvent } from '@renderer/core/engines/AlertEngine'
 
 const engine = new AlertEngine()
@@ -26,13 +26,16 @@ export const useAlertStore = create<AlertStoreState>((set, get) => ({
   ingest: (snapshot) => {
     const fresh = engine.ingest(snapshot)
     if (fresh.length === 0) return fresh
+    // Engine output is chronological; the list is newest first. Copy before
+    // reversing so the array handed back to the caller keeps engine order.
+    const newestFirst = [...fresh].reverse()
     if (get().muted) {
       // Still record them, just don't bump the unseen "attention" counter loudly.
-      set((s) => ({ alerts: [...fresh.reverse(), ...s.alerts].slice(0, MAX_ALERTS) }))
+      set((s) => ({ alerts: [...newestFirst, ...s.alerts].slice(0, MAX_ALERTS) }))
       return fresh
     }
     set((s) => ({
-      alerts: [...fresh.slice().reverse(), ...s.alerts].slice(0, MAX_ALERTS),
+      alerts: [...newestFirst, ...s.alerts].slice(0, MAX_ALERTS),
       unseen: s.unseen + fresh.length
     }))
     return fresh

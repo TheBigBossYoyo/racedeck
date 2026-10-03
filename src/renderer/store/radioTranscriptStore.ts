@@ -3,6 +3,7 @@ import { STORE_NS } from '@shared/ipc-contract'
 import { hasBridge, bridge } from '@renderer/lib/ipc'
 import { useSettingsStore } from './settingsStore'
 import { persist } from './persist'
+import { describeError, isRecord, writeLogged } from './persistWrite'
 
 /**
  * Team-radio transcripts (round-2 live-session feedback: "Did you add
@@ -32,14 +33,33 @@ interface RadioTranscriptState {
 const K = { entries: 'entries' }
 const IDLE: TranscriptEntry = { status: 'idle', text: '', error: null }
 
-function isEntryMap(v: unknown): v is Record<string, TranscriptEntry> {
-  return (
-    Boolean(v) &&
-    typeof v === 'object' &&
-    Object.values(v as Record<string, unknown>).every(
-      (e) => e && typeof e === 'object' && typeof (e as TranscriptEntry).status === 'string'
-    )
-  )
+/** Every persisted write carries the whole map, so it must not grow without bound. */
+export const MAX_PERSISTED_TRANSCRIPTS = 200
+
+/**
+ * Only a finished transcript is worth keeping: a persisted 'loading' entry would
+ * stick forever (nothing resumes it) and an 'error' one would block a retry.
+ */
+function isDoneEntry(value: unknown): value is TranscriptEntry {
+  return isRecord(value) && value.status === 'done' && typeof value.text === 'string'
+}
+
+/** The newest `limit` finished transcripts, in insertion order (oldest evicted first). */
+function capDoneEntries(
+  entries: Record<string, TranscriptEntry>,
+  limit: number
+): Record<string, TranscriptEntry> {
+  const done = Object.entries(entries).filter(([, entry]) => entry.status === 'done')
+  return Object.fromEntries(done.slice(-limit))
+}
+
+function sanitizeEntries(raw: unknown): Record<string, TranscriptEntry> {
+  if (!isRecord(raw)) return {}
+  const clean: Record<string, TranscriptEntry> = {}
+  for (const [url, entry] of Object.entries(raw)) {
+    if (isDoneEntry(entry)) clean[url] = { status: 'done', text: entry.text, error: null }
+  }
+  return capDoneEntries(clean, MAX_PERSISTED_TRANSCRIPTS)
 }
 
 export const useRadioTranscriptStore = create<RadioTranscriptState>((set, get) => ({
@@ -48,7 +68,7 @@ export const useRadioTranscriptStore = create<RadioTranscriptState>((set, get) =
 
   hydrate: async () => {
     const raw = await persist.get<unknown>(STORE_NS.RADIO_TRANSCRIPTS, K.entries)
-    set({ entries: isEntryMap(raw) ? raw : {}, hydrated: true })
+    set({ entries: sanitizeEntries(raw), hydrated: true })
   },
 
   entryFor: (url) => get().entries[url] ?? IDLE,
@@ -58,9 +78,18 @@ export const useRadioTranscriptStore = create<RadioTranscriptState>((set, get) =
     if (current?.status === 'loading' || current?.status === 'done') return
 
     const setEntry = (entry: TranscriptEntry, persistIt: boolean) => {
-      const entries = { ...get().entries, [url]: entry }
+      // Re-insert so a fresh result counts as the newest when the cap evicts.
+      const entries = { ...get().entries }
+      delete entries[url]
+      entries[url] = entry
       set({ entries })
-      if (persistIt) void persist.set(STORE_NS.RADIO_TRANSCRIPTS, K.entries, entries)
+      if (persistIt) {
+        writeLogged(
+          STORE_NS.RADIO_TRANSCRIPTS,
+          K.entries,
+          capDoneEntries(entries, MAX_PERSISTED_TRANSCRIPTS)
+        )
+      }
     }
 
     if (!hasBridge()) {
@@ -71,11 +100,15 @@ export const useRadioTranscriptStore = create<RadioTranscriptState>((set, get) =
     }
     const ai = useSettingsStore.getState().ai
     setEntry({ status: 'loading', text: '', error: null }, false)
-    const res = await bridge().ai.transcribe({ config: ai, audioUrl: url })
-    if (res.ok) {
-      setEntry({ status: 'done', text: res.text, error: null }, true)
-    } else {
-      setEntry({ status: 'error', text: '', error: res.error ?? 'Transcription failed.' }, false)
+    try {
+      const res = await bridge().ai.transcribe({ config: ai, audioUrl: url })
+      if (res.ok) {
+        setEntry({ status: 'done', text: res.text, error: null }, true)
+      } else {
+        setEntry({ status: 'error', text: '', error: res.error ?? 'Transcription failed.' }, false)
+      }
+    } catch (error) {
+      setEntry({ status: 'error', text: '', error: `Transcription failed: ${describeError(error)}` }, false)
     }
   }
 }))

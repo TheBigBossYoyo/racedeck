@@ -1,4 +1,5 @@
 import type { SessionType, TrackStatus } from '@shared/models'
+import type { PhaseKind, RacePhaseSegment, SessionTimeline } from '@renderer/core/model/timeline'
 
 /**
  * SessionPhaseEngine — turns a session's raw track-status + lap-count series into
@@ -12,26 +13,8 @@ import type { SessionType, TrackStatus } from '@shared/models'
  * for the current-phase label.
  */
 
-export type PhaseKind = 'pre' | 'green' | 'q1' | 'q2' | 'q3' | 'break' | 'yellow' | 'vsc' | 'sc' | 'red' | 'post'
-
-export interface RacePhaseSegment {
-  kind: PhaseKind
-  tStart: number
-  tEnd: number
-  lapStart: number | null
-  lapEnd: number | null
-}
-
-export interface SessionTimeline {
-  segments: RacePhaseSegment[]
-  /** Feed time (s) racing goes green (lights out for a race). */
-  greenStart: number | null
-  /** Feed time (s) of the chequered flag / race end. */
-  chequered: number | null
-  totalLaps: number | null
-  type: SessionType
-  duration: number
-}
+// The timeline shape lives in the neutral model (the DataProvider contract needs it too).
+export type { PhaseKind, RacePhaseSegment, SessionTimeline }
 
 export interface PhaseInput {
   duration: number

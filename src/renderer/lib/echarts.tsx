@@ -20,7 +20,8 @@ echarts.use([BarChart, LineChart, GridComponent, TooltipComponent, AxisPointerCo
 export function cssVar(name: string, fallback = '255 255 255'): string {
   if (typeof document === 'undefined') return `rgb(${fallback})`
   const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim()
-  return `rgb(${v || fallback})`
+  // Tokens are space-separated for `rgb(var(--x) / a)`; the canvas colour parser wants commas.
+  return `rgb(${(v || fallback).trim().split(/[\s,]+/).join(', ')})`
 }
 
 const FG_MUTED = '#969CAC'

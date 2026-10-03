@@ -9,16 +9,11 @@ import type {
   PositionSample,
   TelemetrySample,
   DataAvailabilityMap,
-  TrackStatus,
-  LapPositionSeries,
-  DriverSessionBests,
-  PitLaneTime,
-  TeamRadioClip,
-  CurrentTyre,
-  DriverTyreStintHistory
+  TrackStatus
 } from '@shared/models'
-import type { SessionTimeline } from '@renderer/core/engines/SessionPhaseEngine'
-import type { SessionClockRemaining } from '@shared/f1live'
+import type { RaceSnapshot } from '@renderer/core/model/snapshot'
+import type { EnrichmentProgress, FeedQualityReport } from '@renderer/core/model/feedHealth'
+import type { SessionTimeline } from '@renderer/core/model/timeline'
 
 /**
  * Capability descriptor. Providers advertise what they can legally/technically
@@ -37,59 +32,6 @@ export interface ProviderCapabilities {
   /** Compliance/ToS risk surfaced to the user. */
   riskLevel: 'none' | 'low' | 'medium'
   latencyClass: 'instant' | 'near-real-time' | 'delayed' | 'historical'
-}
-
-/** A complete, normalized view of the session at one moment (session-clock t). */
-export interface RaceSnapshot {
-  session: SessionInfo
-  drivers: Driver[]
-  timing: TimingEntry[]
-  laps: LapSample[]
-  stints: Stint[]
-  raceControl: RaceControlMessage[]
-  weather: WeatherSample | null
-  weatherHistory: WeatherSample[]
-  positions: PositionSample[]
-  /** Stable session-wide x/y circuit trace when the provider can precompute it. */
-  trackPath?: { x: number; y: number }[]
-  /**
-   * F1's own per-lap classification. Covers the whole session even on a mid-
-   * session live connect, unlike anything derived from observed laps.
-   */
-  lapPositions?: LapPositionSeries[]
-  /** Per-driver session bests incl. speed-trap/intermediate speeds. */
-  sessionBests?: DriverSessionBests[]
-  /** Measured pit-lane transits — real time lost, not a model estimate. */
-  pitLaneTimes?: PitLaneTime[]
-  /** Team-radio captures, newest first, with playable URLs. */
-  teamRadio?: TeamRadioClip[]
-  /** F1's direct statement of the tyre set fitted right now, per driver. */
-  currentTyres?: CurrentTyre[]
-  /** F1's own per-driver tyre-set stint history (`TyreStintSeries`), when available. */
-  tyreStintHistory?: DriverTyreStintHistory[]
-  /**
-   * Milliseconds since each raw feed topic (e.g. `Position`, `CarData`,
-   * `TimingData`) last received new data. Wall-clock, so only meaningful for a
-   * LIVE session — a replay's clock is the scrub position, not real time, so
-   * there is nothing to be "stale" against. Absent/omitted outside live.
-   */
-  feedFreshness?: Record<string, number>
-  /** Latest short race-control ticker line, e.g. "CLEAR IN TRACK SECTOR 12". */
-  trackMessage?: string | null
-  availability: DataAvailabilityMap
-  /** Session clock (seconds since session start) this snapshot represents. */
-  clock: number
-  currentLap: number | null
-  totalLaps: number | null
-  trackStatus: TrackStatus
-  /** Active qualifying segment from TimingData (Q1/Q2/Q3), when available. */
-  qualifyingPart?: 1 | 2 | 3 | null
-  /**
-   * Authoritative session/segment countdown from the feed's ExtrapolatedClock
-   * (the broadcast clock — it freezes on red flags), evaluated at `clock`.
-   * Null when the feed carries no clock (e.g. providers without it).
-   */
-  sessionClock?: SessionClockRemaining | null
 }
 
 /**
@@ -134,6 +76,12 @@ export interface ProviderDiagnostics {
   cacheSchemaVersion: number
   enrichmentProcessedPoints: number
   enrichmentIssue: string | null
+  /**
+   * Archive enrichment (Position + CarData loaded in chunks after core timing).
+   * Null when no enrichment is under way for the loaded session — live sessions,
+   * nothing loaded yet, or the load was cancelled.
+   */
+  enrichmentProgress: EnrichmentProgress | null
   /** Raw Position stream points accumulated so far (live map outline). */
   trackRawPointCount: number
   /** Driver number the outline trace follows, or null if none found yet. */
@@ -143,23 +91,21 @@ export interface ProviderDiagnostics {
   /** Length of the ADOPTED trace (open fallback or closed), 0 if neither yet. */
   trackAdoptedLength: number
   trackPathClosed: boolean
+  /** Feed shape anomalies seen since the session (or live connection) began. */
+  feedQuality: FeedQualityReport
 }
 
-/** Empty availability with everything off — a safe default. */
-export function emptyAvailability(): DataAvailabilityMap {
-  return {
-    timing: false,
-    laps: false,
-    stints: false,
-    intervals: false,
-    raceControl: false,
-    weather: false,
-    positions: false,
-    positionProgress: false,
-    telemetry: false,
-    live: false
-  }
-}
+// The data-shape types moved to the neutral `core/model/` layer (engines, stores and
+// widgets import them from there); re-exported so provider-side imports keep resolving.
+export { emptyAvailability } from '@renderer/core/model/snapshot'
+export type { RaceSnapshot, DriverFeedTopic, DriverFeedFreshness } from '@renderer/core/model/snapshot'
+export type {
+  EnrichmentFeedProgress,
+  EnrichmentProgress,
+  FeedAnomalyReason,
+  FeedAnomalies,
+  FeedQualityReport
+} from '@renderer/core/model/feedHealth'
 
 export type {
   SessionInfo,

@@ -1,4 +1,4 @@
-import type { RaceSnapshot } from '@renderer/core/providers/types'
+import type { RaceSnapshot } from '@renderer/core/model/snapshot'
 
 /**
  * Race-state bookmarks for replay (APP_IMPROVEMENT_ROADMAP.md P1 item 13).

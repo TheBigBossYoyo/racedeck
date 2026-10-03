@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { STORE_NS } from '@shared/ipc-contract'
 import { persist } from './persist'
+import { describeError, writeLogged } from './persistWrite'
 import {
   createAnnotation,
   sanitizeAnnotations,
@@ -30,7 +31,7 @@ interface AnnotationsState {
 let readVersion = 0
 
 function persistCurrent(sessionId: string, annotations: UserAnnotation[]): void {
-  void persist.set(STORE_NS.ANNOTATIONS, sessionId, annotations)
+  writeLogged(STORE_NS.ANNOTATIONS, sessionId, annotations)
 }
 
 export const useAnnotationsStore = create<AnnotationsState>((set, get) => ({
@@ -40,7 +41,14 @@ export const useAnnotationsStore = create<AnnotationsState>((set, get) => ({
   hydrateForSession: async (sessionId) => {
     const version = ++readVersion
     set({ sessionId, annotations: [] })
-    const raw = await persist.get<unknown>(STORE_NS.ANNOTATIONS, sessionId)
+    let raw: unknown = null
+    try {
+      raw = await persist.get<unknown>(STORE_NS.ANNOTATIONS, sessionId)
+    } catch (error) {
+      console.error(
+        `[persist] Could not read annotations for session ${sessionId} — ${describeError(error)}`
+      )
+    }
     if (version !== readVersion || get().sessionId !== sessionId) return
     set({ annotations: sanitizeAnnotations(raw) })
   },

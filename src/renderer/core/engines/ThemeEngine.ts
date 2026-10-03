@@ -54,11 +54,19 @@ export function resolveTheme(mode: ThemeMode): 'dark' | 'light' {
 let mql: MediaQueryList | null = null
 let mqlHandler: (() => void) | null = null
 
-/** Darken an "r, g, b" accent toward a richer shade for contrast on light bg. */
+/**
+ * ACCENT_PRESETS keep the "r, g, b" form (JS consumers build `rgb(${...})` from it), but the CSS
+ * variables feed `rgb(var(--accent) / <alpha>)`, which is only valid with SPACE separators.
+ */
+function toCssTriple(rgb: string): string {
+  return rgb.trim().split(/[\s,]+/).join(' ')
+}
+
+/** Darken an accent triple toward a richer shade for contrast on light bg; returns a CSS triple. */
 function darkenAccent(rgb: string, factor: number): string {
-  const parts = rgb.split(',').map((n) => parseInt(n.trim(), 10))
-  if (parts.length !== 3 || parts.some((n) => Number.isNaN(n))) return rgb
-  return parts.map((c) => Math.max(0, Math.round(c * factor))).join(', ')
+  const parts = rgb.trim().split(/[\s,]+/).map((n) => parseInt(n, 10))
+  if (parts.length !== 3 || parts.some((n) => Number.isNaN(n))) return toCssTriple(rgb)
+  return parts.map((c) => Math.max(0, Math.round(c * factor))).join(' ')
 }
 
 export const ThemeEngine = {
@@ -69,7 +77,7 @@ export const ThemeEngine = {
 
     const baseAccent = ACCENT_PRESETS[config.accent] ?? ACCENT_PRESETS.cyan
     // The vivid dark-theme accent reads as neon on white — deepen it for light.
-    const accent = resolved === 'light' ? darkenAccent(baseAccent, 0.72) : baseAccent
+    const accent = resolved === 'light' ? darkenAccent(baseAccent, 0.72) : toCssTriple(baseAccent)
     root.style.setProperty('--accent', accent)
     root.style.setProperty('--accent-soft', accent)
     root.style.setProperty('--speed', accent)

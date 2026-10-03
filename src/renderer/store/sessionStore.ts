@@ -1,12 +1,11 @@
 import { create } from 'zustand'
 import type { LapSample, RaceControlMessage, SessionInfo } from '@shared/models'
 import { DataProviderManager } from '@renderer/core/DataProviderManager'
-import type {
-  ProviderCapabilities,
-  RaceSnapshot,
-  SessionTimeline
-} from '@renderer/core/providers/types'
+import type { ProviderCapabilities } from '@renderer/core/providers/types'
+import type { RaceSnapshot } from '@renderer/core/model/snapshot'
+import type { SessionTimeline } from '@renderer/core/model/timeline'
 import { clamp } from '@renderer/lib/utils'
+import { errorMessage } from '@renderer/lib/errorMessage'
 import { useSyncStore } from './syncStore'
 import { useAlertStore } from './alertStore'
 import { useSettingsStore } from './settingsStore'
@@ -18,6 +17,7 @@ import { useProfileStore } from './profileStore'
 import { syncMath } from '@renderer/core/engines/SessionSyncEngine'
 import { shouldPauseAtDataEdge } from '@shared/f1-session-state'
 import { buildRaceBookmarks, type RaceBookmark } from '@renderer/core/engines/RaceBookmarks'
+import { recordDerivation } from '@renderer/core/engines/DerivationTimings'
 
 const manager = new DataProviderManager()
 
@@ -26,6 +26,39 @@ let lastTick = 0
 let sessionLoadVersion = 0
 let sessionListVersion = 0
 let reloadPromise: Promise<boolean> | null = null
+/** A caller that did NOT defer joined the in-flight reload: it is owed a publish
+ * even if the reload itself was started with `deferPublish`. */
+let reloadNeedsPublish = false
+/** >0 while code that follows the data (not the user) is moving the playhead. */
+let programmaticSeekDepth = 0
+
+/**
+ * Run `fn` with any `seek` it makes treated as the app following the data (the
+ * live-edge follow), not the user navigating: it moves the playhead but is not
+ * recorded in `recentSeeks`, which the command palette offers as "resume where
+ * I was".
+ */
+export function asProgrammaticSeek<T>(fn: () => T): T {
+  programmaticSeekDepth++
+  try {
+    return fn()
+  } finally {
+    programmaticSeekDepth--
+  }
+}
+
+/**
+ * Clear every store that holds data derived from the previous provider/session.
+ * One place so a provider switch and a successful session load can't drift apart
+ * (a switch used to leave the old provider's alerts, story and radio notices up
+ * until — and unless — the next session loaded).
+ */
+function resetSessionScopedStores(): void {
+  useAlertStore.getState().resetEngine()
+  useRaceStoryStore.getState().reset()
+  useEngineerNotesStore.getState().reset()
+  useRadioNotifyStore.getState().reset()
+}
 
 function isKnownLapAtTime(lap: LapSample, dataTime: number, currentLap: number | null): boolean {
   if (lap.sessionTime != null && Number.isFinite(lap.sessionTime))
@@ -62,8 +95,13 @@ interface SessionStoreState {
   setProvider: (id: string) => Promise<void>
   refreshSessions: () => Promise<void>
   selectSession: (id: string, opts?: { seekFraction?: number }) => Promise<void>
-  /** Re-fetch the current session (extends a live session's timeline). */
-  reloadSession: () => Promise<boolean>
+  /**
+   * Re-fetch the current session (extends a live session's timeline).
+   * `deferPublish` updates duration/timeline but leaves the snapshot to the
+   * caller's next `seek`/`recompute`, so a live poll that is about to move the
+   * playhead publishes once instead of twice.
+   */
+  reloadSession: (opts?: { deferPublish?: boolean }) => Promise<boolean>
 
   play: () => void
   pause: () => void
@@ -120,10 +158,23 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
   },
 
   setProvider: async (id) => {
-    sessionLoadVersion++
+    const requestVersion = ++sessionLoadVersion
     get().pause()
     try {
       const caps = manager.setActive(id)
+      // Clear every store scoped to the outgoing provider/session BEFORE this
+      // store's own reset, so nothing can observe sessionStore already
+      // cleared while a dependent store (annotations, follow-eligibility)
+      // still holds state from the previous provider.
+      useSyncStore.getState().setFollowEligible(false)
+      useAnnotationsStore.getState().reset()
+      resetSessionScopedStores()
+      // The old session's sync offset must not follow us to the new provider.
+      // Best-effort: a failed offset read only means the offset stays at its default.
+      void useSyncStore
+        .getState()
+        .setScope(null)
+        .catch(() => undefined)
       set({
         providerId: caps.id,
         sessions: [],
@@ -135,11 +186,12 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
         loadingSession: false,
         error: null
       })
-      useAnnotationsStore.getState().reset()
-      useSyncStore.getState().setFollowEligible(false)
       await get().refreshSessions()
     } catch (e) {
-      set({ error: (e as Error).message })
+      // A newer setProvider/selectSession call may have already superseded
+      // this one — don't let a late failure stomp its state with our error.
+      if (requestVersion !== sessionLoadVersion) return
+      set({ error: errorMessage(e) })
     }
   },
 
@@ -153,7 +205,7 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
       set({ sessions, sessionsLoading: false })
     } catch (e) {
       if (requestVersion !== sessionListVersion || get().providerId !== providerId) return
-      set({ sessionsLoading: false, error: `Could not load sessions: ${(e as Error).message}` })
+      set({ sessionsLoading: false, error: `Could not load sessions: ${errorMessage(e)}` })
     }
   },
 
@@ -172,9 +224,7 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
       if (requestVersion !== sessionLoadVersion || get().providerId !== providerId) return
       const duration = manager.getDuration()
       await useSyncStore.getState().setScope(`${get().providerId}:${session.id}`)
-      useAlertStore.getState().resetEngine()
-      useRaceStoryStore.getState().reset()
-      useEngineerNotesStore.getState().reset()
+      resetSessionScopedStores()
       void useAnnotationsStore.getState().hydrateForSession(session.id)
       const startClock =
         opts?.seekFraction != null
@@ -216,13 +266,16 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
       get().recompute()
     } catch (e) {
       if (requestVersion !== sessionLoadVersion || get().providerId !== providerId) return
-      set({ loadingSession: false, error: `Could not load session: ${(e as Error).message}` })
+      set({ loadingSession: false, error: `Could not load session: ${errorMessage(e)}` })
     }
   },
 
-  reloadSession: async () => {
+  reloadSession: async (opts) => {
     if (get().loadingSession) return false
-    if (reloadPromise) return reloadPromise
+    if (reloadPromise) {
+      if (!opts?.deferPublish) reloadNeedsPublish = true
+      return reloadPromise
+    }
     const cur = get().currentSession
     if (!cur) return false
     const requestVersion = sessionLoadVersion
@@ -238,15 +291,16 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
           return false
         const duration = manager.getDuration()
         set({ duration, timeline: manager.getTimeline() })
-        get().recompute()
+        if (!opts?.deferPublish || reloadNeedsPublish) get().recompute()
         return true
       } catch (e) {
         if (requestVersion === sessionLoadVersion && get().providerId === providerId) {
-          set({ error: `Could not refresh session: ${(e as Error).message}` })
+          set({ error: `Could not refresh session: ${errorMessage(e)}` })
         }
         return false
       } finally {
         reloadPromise = null
+        reloadNeedsPublish = false
       }
     })()
     return reloadPromise
@@ -290,8 +344,12 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
   seek: (t) => {
     const duration = get().duration
     const clock = clamp(t, 0, duration)
-    const recentSeeks = [clock, ...get().recentSeeks.filter((s) => s !== clock)].slice(0, 8)
-    set({ clock, recentSeeks })
+    if (programmaticSeekDepth > 0) {
+      set({ clock })
+    } else {
+      const recentSeeks = [clock, ...get().recentSeeks.filter((s) => s !== clock)].slice(0, 8)
+      set({ clock, recentSeeks })
+    }
     get().recompute()
   },
 
@@ -318,14 +376,17 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
     const s = get()
     if (!s.currentSession) return
     try {
+      const startedAt = performance.now()
       const snapshot = manager.getSnapshotAt(get().effectiveDataTime())
       set({ snapshot })
+      const builtAt = performance.now()
       useAlertStore.getState().ingest(snapshot)
       useRaceStoryStore.getState().ingest(snapshot)
       useEngineerNotesStore.getState().ingest(snapshot)
       useRadioNotifyStore.getState().ingest(snapshot)
+      recordDerivation(builtAt - startedAt, performance.now() - builtAt)
     } catch (e) {
-      set({ error: (e as Error).message })
+      set({ error: errorMessage(e) })
     }
   },
 
@@ -375,3 +436,10 @@ manager.setUpdateListener(() => {
 })
 
 export { manager as dataManager }
+
+/**
+ * Non-reactive read of the recompute timing rings (see DerivationTimings). A
+ * plain function rather than store state so sampling never triggers a render;
+ * callers poll it on open / a slow interval.
+ */
+export { getDerivationTimingStats } from '@renderer/core/engines/DerivationTimings'

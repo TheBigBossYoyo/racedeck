@@ -1,5 +1,6 @@
 import type { RaceControlMessage } from '@shared/models'
-import type { RaceSnapshot } from '@renderer/core/providers/types'
+import type { RaceSnapshot } from '@renderer/core/model/snapshot'
+import { qualifyingDropZoneFrom, resolveQualifyingStage } from '@renderer/core/engines/QualifyingEngine'
 
 /**
  * AlertEngine — edge-triggered alerting. It diffs consecutive snapshots so each
@@ -70,6 +71,8 @@ export class AlertEngine {
   private rainingBefore = false
   private pitBefore = new Map<number, boolean>()
   private eliminationWarned = new Set<number>()
+  /** Segment the warned set belongs to; a new segment moves the cut, so it re-arms. */
+  private eliminationStage: 1 | 2 | 3 | null = null
 
   constructor(config: Partial<AlertConfig> = {}) {
     this.config = { ...DEFAULT_ALERT_CONFIG, ...config }
@@ -89,6 +92,7 @@ export class AlertEngine {
     this.rainingBefore = false
     this.pitBefore.clear()
     this.eliminationWarned.clear()
+    this.eliminationStage = null
   }
 
   /** Feed the latest snapshot; returns any newly triggered alerts. */
@@ -150,16 +154,26 @@ export class AlertEngine {
 
     // ── Qualifying elimination risk (favorites) ──
     if (this.config.qualiElimination && next.session.type.includes('qualifying')) {
-      const dropZoneFrom = 16
-      for (const t of next.timing) {
-        if (!fav(t.driverNumber)) continue
-        if ((t.position ?? 0) >= dropZoneFrom && !this.eliminationWarned.has(t.driverNumber)) {
-          this.eliminationWarned.add(t.driverNumber)
-          events.push(
-            this.make('quali-elimination', `${code(t.driverNumber)} in the drop zone`, `Currently P${t.position} — elimination risk. Needs a lap.`, 'warning', [t.driverNumber], new Date(now).toISOString(), now)
-          )
+      // The cut comes from the same grid- and segment-aware rule as the qualifying
+      // board. An unknown segment (or Q3) has no drop zone: better silent than a guess.
+      const stage = resolveQualifyingStage(next)
+      const gridSize = next.timing.filter((t) => t.position != null).length
+      const dropZoneFrom = stage != null ? qualifyingDropZoneFrom(stage, gridSize) : null
+      if (stage !== this.eliminationStage) {
+        this.eliminationWarned.clear()
+        this.eliminationStage = stage
+      }
+      if (dropZoneFrom != null) {
+        for (const t of next.timing) {
+          if (!fav(t.driverNumber)) continue
+          if ((t.position ?? 0) >= dropZoneFrom && !this.eliminationWarned.has(t.driverNumber)) {
+            this.eliminationWarned.add(t.driverNumber)
+            events.push(
+              this.make('quali-elimination', `${code(t.driverNumber)} in the drop zone`, `Currently P${t.position} — elimination risk. Needs a lap.`, 'warning', [t.driverNumber], new Date(now).toISOString(), now)
+            )
+          }
+          if ((t.position ?? 99) < dropZoneFrom) this.eliminationWarned.delete(t.driverNumber)
         }
-        if ((t.position ?? 99) < dropZoneFrom) this.eliminationWarned.delete(t.driverNumber)
       }
     }
 

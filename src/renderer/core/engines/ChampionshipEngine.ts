@@ -1,5 +1,5 @@
 import type { Driver } from '@shared/models'
-import type { RaceSnapshot } from '@renderer/core/providers/types'
+import type { RaceSnapshot } from '@renderer/core/model/snapshot'
 import type { SeasonChampionship, DriverStanding, ConstructorStanding } from '@shared/standings'
 import { POINTS_RACE, POINTS_SPRINT } from './WinProbabilityEngine'
 

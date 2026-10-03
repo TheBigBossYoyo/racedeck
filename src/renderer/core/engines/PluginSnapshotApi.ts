@@ -1,5 +1,6 @@
-import type { RaceSnapshot, DataAvailabilityMap } from '@renderer/core/providers/types'
+import type { RaceSnapshot } from '@renderer/core/model/snapshot'
 import type {
+  DataAvailabilityMap,
   Driver,
   LapSample,
   RaceControlMessage,

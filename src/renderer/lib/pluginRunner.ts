@@ -1,4 +1,5 @@
 import type { PluginSnapshot } from '@renderer/core/engines/PluginSnapshotApi'
+import { errorMessage } from '@renderer/lib/errorMessage'
 
 /**
  * Runs a local plugin's `compute(snapshot)` inside a sandboxed Web Worker
@@ -10,6 +11,11 @@ import type { PluginSnapshot } from '@renderer/core/engines/PluginSnapshotApi'
  * `nodeIntegration: false`, so a Worker spawned from it has no Node access
  * either; Workers never have DOM access. Bounded to 1s so a hung or
  * malicious plugin can't block the UI.
+ *
+ * Caveat: the app shell CSP (index.html) has `script-src 'self'` with no `blob:` and no
+ * `unsafe-eval`, so a Blob Worker and the harness's `new Function` are expected to be
+ * blocked in the packaged app. Those failures are surfaced verbatim with an explanatory
+ * hint instead of hanging; making plugins actually run needs a CSP decision (see report).
  */
 
 const HARNESS = `
@@ -58,44 +64,102 @@ export function withTimeout<T>(task: Promise<T>, ms: number, onTimeout: () => T)
   })
 }
 
-function runInWorker(source: string, snapshot: PluginSnapshot): Promise<PluginRunResult> {
-  return new Promise((resolve) => {
-    if (typeof Worker === 'undefined') {
-      resolve({ error: 'Plugins require a browser Worker, unavailable in this environment.' })
-      return
-    }
-    let url: string | null = null
-    let worker: Worker | null = null
-    try {
-      const blob = new Blob([HARNESS], { type: 'application/javascript' })
-      url = URL.createObjectURL(blob)
-      worker = new Worker(url)
-    } catch (e) {
-      resolve({ error: e instanceof Error ? e.message : 'Failed to start the plugin sandbox.' })
-      return
-    }
-    const cleanup = () => {
-      worker?.terminate()
-      if (url) URL.revokeObjectURL(url)
-    }
-    worker.onmessage = (e) => {
-      cleanup()
-      const data = e.data as { ok: boolean; result?: unknown; error?: string }
-      resolve(
-        data.ok ? sanitizePluginResult(data.result) : { error: data.error ?? 'Plugin failed.' }
-      )
-    }
-    worker.onerror = (e) => {
-      cleanup()
-      resolve({ error: e.message || 'Plugin crashed.' })
-    }
-    worker.postMessage({ source, snapshot })
-  })
+interface Sandbox {
+  worker: Worker
+  /** Terminate the worker and release its blob URL. Safe to call more than once. */
+  dispose: () => void
 }
 
-/** Run a plugin's `compute(snapshot)` in a sandboxed Worker, bounded to 1s. */
+interface PluginRun {
+  result: Promise<PluginRunResult>
+  /** Force-stop the run (used when the timeout wins so a spinning plugin cannot leak). */
+  dispose: () => void
+}
+
+const CSP_HINT =
+  "The app's Content Security Policy (script-src 'self', no blob: workers, no unsafe-eval) " +
+  'may be blocking the plugin sandbox.'
+const CSP_SIGNATURE = /content security policy|unsafe-eval|refused to (?:create|evaluate)/i
+
+/** Append the CSP explanation when a failure message looks CSP-related. */
+function withCspHint(message: string): string {
+  return CSP_SIGNATURE.test(message) ? `${message} ${CSP_HINT}` : message
+}
+
+function failedRun(error: string): PluginRun {
+  return { result: Promise.resolve({ error }), dispose: () => {} }
+}
+
+function startSandbox(): Sandbox {
+  const blob = new Blob([HARNESS], { type: 'application/javascript' })
+  const url = URL.createObjectURL(blob)
+  let worker: Worker
+  try {
+    worker = new Worker(url)
+  } catch (e) {
+    URL.revokeObjectURL(url)
+    throw e
+  }
+  let disposed = false
+  const dispose = () => {
+    if (disposed) return
+    disposed = true
+    worker.terminate()
+    URL.revokeObjectURL(url)
+  }
+  return { worker, dispose }
+}
+
+function interpretReply(data: unknown): PluginRunResult {
+  const reply = (data ?? {}) as { ok?: unknown; result?: unknown; error?: unknown }
+  if (reply.ok === true) return sanitizePluginResult(reply.result)
+  const error = typeof reply.error === 'string' && reply.error ? reply.error : 'Plugin failed.'
+  return { error: withCspHint(error) }
+}
+
+// A harness-level worker error (as opposed to a plugin error, which the harness catches
+// and reports itself) means the worker script never ran, typically a CSP block.
+const SANDBOX_LOAD_FAILURE = `The plugin sandbox failed to start (its Worker script could not load). ${CSP_HINT}`
+
+function startPluginRun(source: string, snapshot: PluginSnapshot): PluginRun {
+  if (typeof Worker === 'undefined') {
+    return failedRun('Plugins require a browser Worker, unavailable in this environment.')
+  }
+  let sandbox: Sandbox
+  try {
+    sandbox = startSandbox()
+  } catch (e) {
+    return failedRun(withCspHint(`Could not start the plugin sandbox: ${errorMessage(e)}`))
+  }
+  const { worker, dispose } = sandbox
+  const result = new Promise<PluginRunResult>((resolve) => {
+    worker.onmessage = (e) => {
+      dispose()
+      resolve(interpretReply(e.data))
+    }
+    worker.onerror = (e) => {
+      dispose()
+      resolve({ error: e.message ? withCspHint(e.message) : SANDBOX_LOAD_FAILURE })
+    }
+    try {
+      worker.postMessage({ source, snapshot })
+    } catch (e) {
+      dispose()
+      resolve({ error: `Could not send the snapshot to the plugin sandbox: ${errorMessage(e)}` })
+    }
+  })
+  return { result, dispose }
+}
+
+/**
+ * Run a plugin's `compute(snapshot)` in a sandboxed Worker, bounded to 1s. On timeout the
+ * worker is terminated: a `while(true){}` plugin would otherwise spin forever and every
+ * further run would add another worker.
+ */
 export function runPlugin(source: string, snapshot: PluginSnapshot): Promise<PluginRunResult> {
-  return withTimeout(runInWorker(source, snapshot), TIMEOUT_MS, () => ({
-    error: `Plugin timed out after ${TIMEOUT_MS}ms.`
-  }))
+  const run = startPluginRun(source, snapshot)
+  return withTimeout(run.result, TIMEOUT_MS, () => {
+    run.dispose()
+    return { error: `Plugin timed out after ${TIMEOUT_MS}ms and was stopped.` }
+  })
 }

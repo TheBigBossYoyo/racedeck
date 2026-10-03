@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { RaceSnapshot } from '@renderer/core/providers/types'
+import type { RaceSnapshot } from '@renderer/core/model/snapshot'
 
 /**
  * radioNotifyStore — a discrete "new team radio" popup queue (round-3
@@ -27,6 +27,8 @@ interface RadioNotifyState {
   queue: RadioNotice[]
   ingest: (snapshot: RaceSnapshot) => void
   dismiss: () => void
+  /** Drop notices AND the seen-clip memory; the next frame becomes a silent baseline. */
+  reset: () => void
 }
 
 const MAX_QUEUE = 5
@@ -79,5 +81,14 @@ export const useRadioNotifyStore = create<RadioNotifyState>((set, get) => ({
   dismiss: () => {
     const [next, ...rest] = get().queue
     set({ current: next ?? null, queue: rest })
+  },
+
+  reset: () => {
+    // Clearing only `seenUrls` would make the next live frame of the SAME session
+    // read its whole clip backlog as new; forgetting the session id sends that
+    // frame through the baseline branch of `ingest` instead.
+    seenUrls = new Set()
+    sessionId = null
+    set({ current: null, queue: [] })
   }
 }))

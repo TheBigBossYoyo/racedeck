@@ -499,19 +499,26 @@ export class OpenF1Provider implements DataProvider {
         return 'CLEAR'
       }
       if (msg.includes('red flag') || m.flag === 'RED') return 'RED'
-      if (msg.includes('safety car')) return 'SAFETY_CAR'
+      // VSC must be tested first: "virtual safety car" also contains "safety car".
       if (msg.includes('virtual safety car') || msg.includes('vsc')) return 'VSC'
+      if (msg.includes('safety car')) return 'SAFETY_CAR'
       if (m.flag === 'YELLOW' || m.flag === 'DOUBLE_YELLOW') return 'YELLOW'
     }
     return 'CLEAR'
   }
 
   private allLapsUpTo(wall: number): LapSample[] {
+    // Counted with the same per-lap test the sample loop below applies. A prefix
+    // scan stopped at the first undated lap (OpenF1 leaves some lap 1s without a
+    // date_start), so the key stopped moving while later laps kept completing and
+    // the cache served a stale array. The completed sets of one driver are nested
+    // as `wall` grows, so equal counts mean equal sets.
     const completedCounts: number[] = []
     for (const laps of this.lapsByDriver.values()) {
       let count = 0
-      while (count < laps.length && this.lapEndMs(laps[count]) <= wall && this.lapEndMs(laps[count]) > 0) {
-        count++
+      for (const lap of laps) {
+        const end = this.lapEndMs(lap)
+        if (end > 0 && end <= wall) count++
       }
       completedCounts.push(count)
     }

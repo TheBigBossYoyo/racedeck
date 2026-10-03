@@ -6,6 +6,7 @@ import type {
 } from '@shared/market'
 import type { Driver } from '@shared/models'
 import { hasBridge, bridge } from '@renderer/lib/ipc'
+import { errorMessage } from '@renderer/lib/errorMessage'
 
 /**
  * marketStore — holds the latest Polymarket win-odds result plus a small cache
@@ -25,14 +26,24 @@ interface MarketStoreState {
   historyByToken: Record<string, MarketHistoryPoint[]>
   historyLoading: Record<string, boolean>
   historyErrorByToken: Record<string, string | null>
+  /** Wall-clock ms a token's history load last failed; absent once it has succeeded. */
+  historyFailedAt: Record<string, number>
 
   refresh: (opts: { query?: string; slug?: string; targetDateMs?: number }) => Promise<void>
   loadHistory: (yesTokenId: string, targetUnix?: number) => Promise<void>
   clear: () => void
 }
 
+/** A failed history load is not retried sooner than this (callers invoke loadHistory on every publish). */
+export const HISTORY_RETRY_COOLDOWN_MS = 30_000
+
 let marketRequestVersion = 0
 let historyRequestVersion = 0
+
+function withoutKey<T>(record: Record<string, T>, key: string): Record<string, T> {
+  const { [key]: _dropped, ...rest } = record
+  return rest
+}
 
 export const useMarketStore = create<MarketStoreState>((set, get) => ({
   loading: false,
@@ -42,6 +53,7 @@ export const useMarketStore = create<MarketStoreState>((set, get) => ({
   historyByToken: {},
   historyLoading: {},
   historyErrorByToken: {},
+  historyFailedAt: {},
 
   refresh: async ({ query, slug, targetDateMs }) => {
     if (!hasBridge()) {
@@ -61,16 +73,18 @@ export const useMarketStore = create<MarketStoreState>((set, get) => ({
       })
     } catch (e) {
       if (requestVersion !== marketRequestVersion) return
-      set({ result: null, loading: false, error: (e as Error).message })
+      set({ result: null, loading: false, error: errorMessage(e) })
     }
   },
 
   loadHistory: async (yesTokenId, targetUnix) => {
     if (!hasBridge() || !yesTokenId) return
-    if (
-      Object.prototype.hasOwnProperty.call(get().historyByToken, yesTokenId) ||
-      get().historyLoading[yesTokenId]
-    ) return
+    if (get().historyLoading[yesTokenId]) return
+    if (Object.prototype.hasOwnProperty.call(get().historyByToken, yesTokenId)) {
+      const failedAt = get().historyFailedAt[yesTokenId]
+      // Loaded fine (no failure stamp), or failed too recently to hit the upstream again.
+      if (failedAt === undefined || Date.now() - failedAt < HISTORY_RETRY_COOLDOWN_MS) return
+    }
     const requestVersion = historyRequestVersion
     set((s) => ({
       historyLoading: { ...s.historyLoading, [yesTokenId]: true },
@@ -95,16 +109,24 @@ export const useMarketStore = create<MarketStoreState>((set, get) => ({
         historyErrorByToken: {
           ...s.historyErrorByToken,
           [yesTokenId]: res.ok ? null : res.error ?? 'Price history unavailable.'
-        }
+        },
+        historyFailedAt: res.ok
+          ? withoutKey(s.historyFailedAt, yesTokenId)
+          : { ...s.historyFailedAt, [yesTokenId]: Date.now() }
       }))
     } catch (error) {
       if (requestVersion !== historyRequestVersion) return
+      // Recorded as an (empty) attempt, exactly like an ok:false result: without an
+      // entry the caller's effect re-requests this token on every snapshot publish.
+      // It is retried once the cooldown passes; clear() re-arms it immediately.
       set((s) => ({
+        historyByToken: { ...s.historyByToken, [yesTokenId]: [] },
         historyLoading: { ...s.historyLoading, [yesTokenId]: false },
         historyErrorByToken: {
           ...s.historyErrorByToken,
-          [yesTokenId]: error instanceof Error ? error.message : 'Price history unavailable.'
-        }
+          [yesTokenId]: errorMessage(error, 'Price history unavailable.')
+        },
+        historyFailedAt: { ...s.historyFailedAt, [yesTokenId]: Date.now() }
       }))
     }
   },
@@ -119,6 +141,7 @@ export const useMarketStore = create<MarketStoreState>((set, get) => ({
       historyByToken: {},
       historyLoading: {},
       historyErrorByToken: {},
+      historyFailedAt: {},
       fetchedAtMs: 0
     })
   }

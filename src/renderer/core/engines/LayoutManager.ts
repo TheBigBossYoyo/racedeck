@@ -32,6 +32,7 @@ export type WidgetKey =
   | 'telemetry'
   | 'strategy-insights'
   | 'pit-predictor'
+  | 'pit-log'
   | 'stint-planner'
   | 'pace-battle'
   | 'driver-dossier'
@@ -84,6 +85,53 @@ export interface WidgetMeta {
 export const GRID_COLS = 12
 export const GRID_ROW_HEIGHT = 26
 export const GRID_MARGIN: [number, number] = [10, 10]
+
+/**
+ * Design-reference container width the grid constants above were tuned
+ * against (matches the default window width in window-manager.ts). Column
+ * width already stretches to fill the container (react-grid-layout's
+ * WidthProvider), but row height/margin are fixed pixel constants — so on a
+ * much wider display (a 4K TV at 100% scaling is ~2.5x this width) every
+ * widget gets proportionally wider but not taller, distorting every preset
+ * into a squashed-flat, oversized shape. `gridScaleFor` fixes that by scaling
+ * row height/margin up in lockstep with width, but only ABOVE the reference
+ * width — never below it, so every already-supported/tested window size
+ * (down to the 1100px minWidth) renders pixel-identically to before.
+ */
+export const REFERENCE_GRID_WIDTH = 1560
+export const MAX_GRID_SCALE = 3
+
+/**
+ * Height counterpart of `REFERENCE_GRID_WIDTH`. Scaling by width alone made a
+ * wide-but-short display (a 3440x1440 ultrawide: width scale ~2.2 wants ~1830px
+ * of grid but only ~1310px exist) overflow vertically, so the scale is also
+ * capped by how much taller the container is than the default window's.
+ *
+ * Derived from the default window height in window-manager.ts (960) minus the
+ * fixed shell chrome stacked above/below the grid on the dashboard: TitleBar
+ * `h-11` (44) + CommandBar `h-11` (44) + StatusBar `h-6` (24). An ASSUMPTION: if
+ * any of those heights changes, update it here (borders, ~1px each, are ignored:
+ * the scale clamps at 1 so a few px cannot alter any supported window size).
+ */
+export const REFERENCE_WINDOW_HEIGHT = 960
+export const SHELL_CHROME_HEIGHT = 44 + 44 + 24
+export const REFERENCE_GRID_HEIGHT = REFERENCE_WINDOW_HEIGHT - SHELL_CHROME_HEIGHT
+
+/**
+ * Row-height/margin scale for a grid container. Never below 1 (so every size at
+ * or under the reference renders pixel-identically) and never above
+ * `MAX_GRID_SCALE`. With a `containerHeight` the scale is the smaller of the
+ * width and height ratios, so the grid grows only as far as BOTH axes allow; an
+ * absent or unmeasured (<= 0) height leaves the width-only behaviour.
+ */
+export function gridScaleFor(containerWidth: number, containerHeight?: number): number {
+  if (!Number.isFinite(containerWidth) || containerWidth <= 0) return 1
+  let raw = containerWidth / REFERENCE_GRID_WIDTH
+  if (containerHeight != null && Number.isFinite(containerHeight) && containerHeight > 0) {
+    raw = Math.min(raw, containerHeight / REFERENCE_GRID_HEIGHT)
+  }
+  return Math.min(Math.max(raw, 1), MAX_GRID_SCALE)
+}
 
 const SZ = (w: number, h: number, minW = 3, minH = 5) => ({ w, h, minW, minH })
 
@@ -153,6 +201,12 @@ export const WIDGET_CATALOG: Record<WidgetKey, WidgetMeta> = {
     title: 'Pit-Now Simulator',
     group: 'strategy',
     defaultSize: SZ(4, 17, 4, 12)
+  },
+  'pit-log': {
+    key: 'pit-log',
+    title: 'Pit Stop Log',
+    group: 'strategy',
+    defaultSize: SZ(4, 10, 3, 6)
   },
   'stint-planner': {
     key: 'stint-planner',
@@ -459,7 +513,7 @@ export function deserializeSavedLayout(input: unknown): SavedLayout | null {
 }
 
 export function isLayoutId(v: unknown): v is LayoutId {
-  return typeof v === 'string' && v in LAYOUT_PRESETS
+  return typeof v === 'string' && Object.hasOwn(LAYOUT_PRESETS, v)
 }
 
 export function createSavedLayout(base: LayoutId, name: string, grid: PanelLayout[]): SavedLayout {

@@ -17,6 +17,27 @@ import { useVideoStore } from '@renderer/store/videoStore'
 // DropdownMenu/ContextMenu→menu, Select→listbox.
 const OVERLAY_SELECTOR = '[role="dialog"],[role="alertdialog"],[role="menu"],[role="listbox"]'
 
+function subtreeHasOverlay(node: Node): boolean {
+  if (node.nodeType !== Node.ELEMENT_NODE) return false
+  const el = node as Element
+  return el.matches(OVERLAY_SELECTOR) || el.querySelector(OVERLAY_SELECTOR) !== null
+}
+
+/**
+ * Whether a batch of childList mutations could have changed if an overlay is
+ * open. Overlay presence only changes when a subtree containing an overlay role
+ * is added or removed, so every other mutation (live timing rows, chart nodes:
+ * nearly every frame) can be skipped without re-scanning the whole document.
+ * Removed nodes are detached but keep their own subtree, so they can be tested.
+ */
+export function mutationsMayChangeOverlays(records: readonly MutationRecord[]): boolean {
+  for (const record of records) {
+    for (const node of record.addedNodes) if (subtreeHasOverlay(node)) return true
+    for (const node of record.removedNodes) if (subtreeHasOverlay(node)) return true
+  }
+  return false
+}
+
 export function useSurfaceOcclusionGuard(): void {
   const setSuppressed = useVideoStore((s) => s.setSurfaceSuppressed)
 
@@ -32,7 +53,9 @@ export function useSurfaceOcclusionGuard(): void {
 
     // Our overlays mount/unmount on open/close (no forceMount), so watching the
     // child tree is enough — no need to observe attribute toggles.
-    const observer = new MutationObserver(schedule)
+    const observer = new MutationObserver((records) => {
+      if (mutationsMayChangeOverlays(records)) schedule()
+    })
     observer.observe(document.body, { childList: true, subtree: true })
     check() // initial sync
 

@@ -41,10 +41,11 @@ export function countAtOrBefore(points: F1StreamPoint[], clock: number): number 
  * Caches one derived value against the prefix of a stream that produced it.
  *
  * Holding the last consumed point by identity — not just the count — is what
- * makes this safe on a live session: the provider rebuilds each stream array on
- * every poll (`[...old, ...new]`), so array identity is useless, but the point
- * OBJECTS are carried over, and a differing one means the underlying data was
- * replaced rather than extended.
+ * makes this safe on a live session: the provider grows
+ * each stream array IN PLACE as polls arrive (copying it once on first append), so
+ * array identity says nothing about whether its contents changed. The point
+ * OBJECTS are never replaced by an append, though, and a differing one at the same
+ * prefix length means the underlying data was replaced rather than extended.
  */
 export class FeedMemo<R> {
   private count = -1

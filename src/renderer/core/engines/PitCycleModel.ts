@@ -1,6 +1,6 @@
 import type { SessionInfo, TimingEntry, TyreCompound } from '@shared/models'
 import type { RaceControlMessage } from '@shared/models'
-import type { RaceSnapshot } from '@renderer/core/providers/types'
+import type { RaceSnapshot } from '@renderer/core/model/snapshot'
 
 const PIT_DEBT_THRESHOLD_SEC = 1.6
 const PIT_DEBT_MAX_LOSS_SEC = 45

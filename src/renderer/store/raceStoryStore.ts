@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { RaceSnapshot } from '@renderer/core/providers/types'
+import type { RaceSnapshot } from '@renderer/core/model/snapshot'
 import { diffSnapshots, type StoryEvent } from '@renderer/core/engines/RaceStoryEngine'
 
 /**
@@ -45,7 +45,7 @@ export const useRaceStoryStore = create<RaceStoryState>((set, get) => ({
         const add = fresh.filter((e) => !existing.has(e.id))
         if (add.length) {
           // Newest first; cap the log.
-          set({ events: [...add.reverse(), ...get().events].slice(0, MAX_EVENTS) })
+          set({ events: [...[...add].reverse(), ...get().events].slice(0, MAX_EVENTS) })
         }
       }
     }

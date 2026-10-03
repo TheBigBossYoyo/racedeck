@@ -30,7 +30,9 @@ export const usePracticeStore = create<PracticeStoreState>((set, get) => ({
 
   load: async (request) => {
     const requestKey = keyOf(request)
-    if (get().requestKey === requestKey && (get().loading || get().result)) return
+    // A failed attempt (error, no result) also counts: retrying it on every snapshot publish
+    // would re-issue the request at the data rate. clear() (the Refresh button) re-arms it.
+    if (get().requestKey === requestKey && (get().loading || get().result || get().error)) return
     if (!hasBridge()) {
       set({ loading: false, error: 'Practice intelligence requires the desktop app.' })
       return

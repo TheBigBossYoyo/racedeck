@@ -1,5 +1,5 @@
 import type { RaceControlMessage } from '@shared/models'
-import type { RaceSnapshot } from '@renderer/core/providers/types'
+import type { RaceSnapshot } from '@renderer/core/model/snapshot'
 
 /**
  * Pit-stop performance history (APP_IMPROVEMENT_ROADMAP.md P2 item 24), built

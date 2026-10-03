@@ -1,7 +1,8 @@
 import { create } from 'zustand'
 import type { LiveStatus } from '@shared/f1live'
 import { hasBridge, bridge } from '@renderer/lib/ipc'
-import { useSessionStore } from './sessionStore'
+import { errorMessage } from '@renderer/lib/errorMessage'
+import { asProgrammaticSeek, useSessionStore } from './sessionStore'
 import { useSettingsStore } from './settingsStore'
 
 /**
@@ -16,6 +17,17 @@ const NORMAL_POLL_MS = 250
 const PERFORMANCE_POLL_MS = 1000
 const EDGE_MARGIN = 2 // stay ~2s behind the very edge so data is complete
 
+/** Reconnect backoff (IMPROVEMENT_OPPORTUNITIES.md item #21): base delay, hard
+ * cap, and the tick cadence used to surface a live "retrying in Ns…" countdown. */
+const RECONNECT_BASE_MS = 1000
+const RECONNECT_MAX_MS = 30_000
+const RECONNECT_TICK_MS = 1000
+/** How long a connection must stay up before the backoff counter starts over.
+ * 'connected' fires at handshake completion, before any data, so it proves nothing
+ * on its own — a server that handshakes and then drops would otherwise be retried
+ * at the base delay forever. */
+const RECONNECT_STABLE_MS = 10_000
+
 let poll: ReturnType<typeof setTimeout> | null = null
 let unsub: (() => void) | null = null
 /** Guard so we load the live session exactly once per connection (idempotent). */
@@ -23,6 +35,92 @@ let liveLoaded = false
 let intentionalDisconnect = false
 let liveLoadVersion = 0
 let pollGeneration = 0
+
+let reconnectTimer: ReturnType<typeof setTimeout> | null = null
+let reconnectTick: ReturnType<typeof setInterval> | null = null
+let reconnectAttempt = 0
+let stableTimer: ReturnType<typeof setTimeout> | null = null
+/** Set by the retry timer just before it calls connect(), so connect() can tell
+ * an automatic retry (keep backing off) from a manual click (start over). */
+let autoRetryInFlight = false
+
+export interface ReconnectState {
+  /** 1-based — the attempt this countdown is waiting to make. */
+  attempt: number
+  remainingMs: number
+}
+
+/**
+ * Exponential backoff with full jitter, capped at RECONNECT_MAX_MS: doubles per
+ * attempt (1s, 2s, 4s, …) then randomizes within [50%, 100%] of that ceiling so
+ * a mass disconnect doesn't have every client retry in lockstep.
+ */
+export function reconnectDelayMs(attempt: number): number {
+  const ceiling = Math.min(RECONNECT_MAX_MS, RECONNECT_BASE_MS * 2 ** attempt)
+  return Math.round(ceiling * (0.5 + Math.random() * 0.5))
+}
+
+/**
+ * Clears any pending auto-retry. The backoff counter is reset too unless
+ * `keepAttempt` is set — the retry timer itself calls connect(), and that call
+ * must not wipe the count or every retry would wait the base delay again.
+ */
+function cancelReconnect({ keepAttempt = false }: { keepAttempt?: boolean } = {}): void {
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer)
+    reconnectTimer = null
+  }
+  if (reconnectTick) {
+    clearInterval(reconnectTick)
+    reconnectTick = null
+  }
+  if (!keepAttempt) reconnectAttempt = 0
+  if (useLiveStore.getState().reconnect) useLiveStore.setState({ reconnect: null })
+}
+
+function clearStableTimer(): void {
+  if (stableTimer) {
+    clearTimeout(stableTimer)
+    stableTimer = null
+  }
+}
+
+/**
+ * Starts the stability window for a fresh connection. Idempotent while running:
+ * the status listener sees 'connected' again on every periodic republish, and
+ * restarting the window each time would keep a busy feed from ever proving stable.
+ */
+function armStableTimer(): void {
+  if (stableTimer) return
+  stableTimer = setTimeout(() => {
+    stableTimer = null
+    reconnectAttempt = 0
+  }, RECONNECT_STABLE_MS)
+}
+
+/** Schedules the next auto-reconnect attempt; a no-op if one is already pending. */
+function scheduleReconnect(): void {
+  if (reconnectTimer) return
+  const attempt = reconnectAttempt
+  const delayMs = reconnectDelayMs(attempt)
+  let remainingMs = delayMs
+  useLiveStore.setState({ reconnect: { attempt: attempt + 1, remainingMs } })
+  reconnectTick = setInterval(() => {
+    remainingMs = Math.max(0, remainingMs - RECONNECT_TICK_MS)
+    useLiveStore.setState({ reconnect: { attempt: attempt + 1, remainingMs } })
+  }, RECONNECT_TICK_MS)
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null
+    if (reconnectTick) {
+      clearInterval(reconnectTick)
+      reconnectTick = null
+    }
+    reconnectAttempt = attempt + 1
+    autoRetryInFlight = true
+    useLiveStore.setState({ reconnect: null })
+    void useLiveStore.getState().connect()
+  }, delayMs)
+}
 
 export function getLiveReloadCadenceMs(performanceMode: boolean): number {
   return performanceMode ? PERFORMANCE_POLL_MS : NORMAL_POLL_MS
@@ -48,17 +146,22 @@ export function liveNoticeForTransition(
     return {
       tone: 'warning',
       title: 'F1 TV session expired',
-      detail: 'Sign in again to restore car telemetry & positions. Public timing continues meanwhile.'
+      detail:
+        'Sign in again to restore car telemetry & positions. Public timing continues meanwhile.'
     }
   }
   if (next.state === 'error') {
     return {
       tone: 'danger',
       title: 'F1 Live connection error',
-      detail: next.detail || 'The live timing connection failed. Retry when your connection is available.'
+      detail:
+        next.detail || 'The live timing connection failed. Retry when your connection is available.'
     }
   }
-  if (next.state === 'closed' && (previous?.state === 'connected' || previous?.state === 'connecting')) {
+  if (
+    next.state === 'closed' &&
+    (previous?.state === 'connected' || previous?.state === 'connecting')
+  ) {
     return {
       tone: 'danger',
       title: 'F1 Live connection lost',
@@ -73,6 +176,7 @@ interface LiveStoreState {
   loggedIn: boolean
   busy: boolean
   notice: LiveNotice | null
+  reconnect: ReconnectState | null
   init: () => void
   openLogin: () => void
   refreshLogin: () => Promise<void>
@@ -117,13 +221,21 @@ function scheduleNextPoll(generation: number): void {
 async function runPoll(generation: number): Promise<void> {
   if (generation !== pollGeneration || !shouldPollLiveSession()) return
   const session = useSessionStore.getState()
-  const updated = await session.reloadSession()
+  // The seek below publishes this poll's one snapshot; letting the reload publish
+  // too would build, fan out and render the same frame twice.
+  const updated = await session.reloadSession({ deferPublish: true })
   if (generation !== pollGeneration) return
   if (updated) {
     const currentSession = useSessionStore.getState()
-    if (currentSession.duration > 0) currentSession.seek(Math.max(0, currentSession.duration - EDGE_MARGIN))
+    if (currentSession.duration > 0)
+      followLiveEdge(currentSession, currentSession.duration)
   }
   scheduleNextPoll(generation)
+}
+
+/** Pin the playhead near the live edge — the app following the data, not the user seeking. */
+function followLiveEdge(session: ReturnType<typeof useSessionStore.getState>, duration: number): void {
+  asProgrammaticSeek(() => session.seek(Math.max(0, duration - EDGE_MARGIN)))
 }
 
 function startPoll(): void {
@@ -151,7 +263,7 @@ async function loadLiveSession(): Promise<void> {
   await session.selectSession('live')
   if (loadVersion !== liveLoadVersion) return
   const dur = useSessionStore.getState().duration
-  if (dur > 0) useSessionStore.getState().seek(Math.max(0, dur - EDGE_MARGIN))
+  if (dur > 0) followLiveEdge(useSessionStore.getState(), dur)
   startPoll()
 }
 
@@ -160,27 +272,38 @@ export const useLiveStore = create<LiveStoreState>((set, get) => ({
   loggedIn: false,
   busy: false,
   notice: null,
+  reconnect: null,
 
   init: () => {
     if (!hasBridge() || unsub) return
     unsub = bridge().f1.onLiveStatus((status) => {
       const previous = get().status
-      const notice = liveNoticeForTransition(previous, status, intentionalDisconnect)
+      const wasIntentional = intentionalDisconnect
+      const notice = liveNoticeForTransition(previous, status, wasIntentional)
       if (status.state === 'closed') intentionalDisconnect = false
       set({
         status,
         notice:
-          notice ??
-          (status.state === 'connected' && status.subscription ? null : get().notice)
+          notice ?? (status.state === 'connected' && status.subscription ? null : get().notice)
       })
       // Auto-load the moment a genuinely-live session appears — this also catches
       // a session that goes green AFTER we connected to an idle feed.
       if (status.state === 'connected' && status.live) void loadLiveSession()
+      if (status.state === 'connected') {
+        // Drop any countdown, but keep the attempt count: the counter resets only
+        // once this connection has proven stable (see RECONNECT_STABLE_MS).
+        cancelReconnect({ keepAttempt: true })
+        armStableTimer()
+      }
       if (status.state === 'error' || status.state === 'closed') {
+        clearStableTimer()
         liveLoadVersion++
         stopPoll()
         liveLoaded = false
         useSessionStore.getState().pause()
+        // Never auto-retry a disconnect the user asked for.
+        if (wasIntentional) cancelReconnect()
+        else scheduleReconnect()
       } else if (status.state === 'connected' && !status.live) {
         const session = useSessionStore.getState()
         if (session.providerId === 'f1live' && session.currentSession?.id === 'live') {
@@ -207,13 +330,20 @@ export const useLiveStore = create<LiveStoreState>((set, get) => ({
   },
 
   connect: async () => {
+    const isAutoRetry = autoRetryInFlight
+    autoRetryInFlight = false
     if (!hasBridge() || get().busy) return
+    // A connect attempt always supersedes a pending auto-retry. A manual one also
+    // restarts the backoff; the timer-driven retry keeps counting.
+    cancelReconnect({ keepAttempt: isAutoRetry })
+    clearStableTimer()
     intentionalDisconnect = false
     set({ busy: true, notice: null })
     liveLoaded = false
     try {
       const status = await bridge().f1.connectLive()
       set({ status })
+      if (status.state === 'connected') armStableTimer()
       // Only take over the dashboard for a genuinely-live session. If the feed is
       // idle (replaying the last finished event) we stay connected and wait — the
       // status listener will auto-load when a session actually goes live.
@@ -222,15 +352,18 @@ export const useLiveStore = create<LiveStoreState>((set, get) => ({
       }
     } catch (e) {
       const status: LiveStatus = {
-          state: 'error',
-          detail: (e as Error).message,
-          sessionName: null,
-          messages: 0,
-          subscription: false,
-          live: false,
-          updatedAt: new Date().toISOString()
-        }
+        state: 'error',
+        detail: errorMessage(e),
+        sessionName: null,
+        messages: 0,
+        subscription: false,
+        live: false,
+        updatedAt: new Date().toISOString()
+      }
       set({ status, notice: liveNoticeForTransition(get().status, status) })
+      // This failure was raised directly (e.g. IPC rejection), not via the push
+      // status listener, so it needs its own backoff schedule.
+      scheduleReconnect()
     } finally {
       set({ busy: false })
     }
@@ -239,6 +372,8 @@ export const useLiveStore = create<LiveStoreState>((set, get) => ({
   disconnect: () => {
     liveLoadVersion++
     intentionalDisconnect = true
+    cancelReconnect()
+    clearStableTimer()
     stopPoll()
     liveLoaded = false
     useSessionStore.getState().pause()

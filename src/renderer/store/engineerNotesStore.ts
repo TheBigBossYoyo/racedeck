@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { RaceSnapshot } from '@renderer/core/providers/types'
+import type { RaceSnapshot } from '@renderer/core/model/snapshot'
 import { deriveEngineerNotes, type EngineerNote } from '@renderer/core/engines/EngineerNotesEngine'
 
 /**
@@ -45,9 +45,10 @@ export const useEngineerNotesStore = create<EngineerNotesState>((set, get) => ({
         const existing = new Set(get().notes.map((n) => n.id))
         const add = fresh.filter((n) => !existing.has(n.id))
         if (add.length) {
-          const newestHigh = [...add].reverse().find((n) => n.priority === 'high')
+          const newestFirst = [...add].reverse()
+          const newestHigh = newestFirst.find((n) => n.priority === 'high')
           set({
-            notes: [...add.reverse(), ...get().notes].slice(0, MAX_NOTES),
+            notes: [...newestFirst, ...get().notes].slice(0, MAX_NOTES),
             lastHighId: newestHigh ? newestHigh.id : get().lastHighId
           })
         }

@@ -1,5 +1,5 @@
 import type { LapSample } from '@shared/models'
-import type { RaceSnapshot } from '@renderer/core/providers/types'
+import type { RaceSnapshot } from '@renderer/core/model/snapshot'
 
 /**
  * FuelModel — a labelled ESTIMATE that removes the fuel-load effect from lap
@@ -106,8 +106,7 @@ function fitCoefficient(snapshot: RaceSnapshot, totalLaps: number): number | nul
   return num / den
 }
 
-/** Derive the fuel coefficient for a session (physical default outside races). */
-export function estimateFuelCoefficient(snapshot: RaceSnapshot): FuelCoefficient {
+function computeFuelCoefficient(snapshot: RaceSnapshot): FuelCoefficient {
   const totalLaps = isFuelRelevant(snapshot) ? snapshot.totalLaps : null
   if (totalLaps == null || totalLaps <= 1) {
     return { sPerLap: DEFAULT_S_PER_FUEL_LAP, confidence: 'estimated', totalLaps: null }
@@ -118,6 +117,51 @@ export function estimateFuelCoefficient(snapshot: RaceSnapshot): FuelCoefficient
   }
   return { sPerLap: DEFAULT_S_PER_FUEL_LAP, confidence: 'estimated', totalLaps }
 }
+
+/**
+ * Memoise a pure function of the snapshot's lap/stint inputs. The providers hand
+ * out the same `laps` array between lap completions while the snapshot object
+ * itself changes several times a second, so the last result is cached per `laps`
+ * identity. Every OTHER field the fuel-aware engines read (`stints`,
+ * `currentLap`, `totalLaps`, session type) is part of the key, so a hit is only
+ * ever the value a fresh computation would return. `compute` must read nothing
+ * else off the snapshot. The returned value is shared between callers: treat it
+ * as read-only.
+ */
+export function memoizeOnLapInputs<T>(compute: (snapshot: RaceSnapshot) => T): (snapshot: RaceSnapshot) => T {
+  interface Entry {
+    stints: RaceSnapshot['stints']
+    currentLap: number | null
+    totalLaps: number | null
+    sessionType: RaceSnapshot['session']['type']
+    result: T
+  }
+  const cache = new WeakMap<RaceSnapshot['laps'], Entry>()
+  return (snapshot) => {
+    const hit = cache.get(snapshot.laps)
+    if (
+      hit != null &&
+      hit.stints === snapshot.stints &&
+      hit.currentLap === snapshot.currentLap &&
+      hit.totalLaps === snapshot.totalLaps &&
+      hit.sessionType === snapshot.session.type
+    ) {
+      return hit.result
+    }
+    const result = compute(snapshot)
+    cache.set(snapshot.laps, {
+      stints: snapshot.stints,
+      currentLap: snapshot.currentLap,
+      totalLaps: snapshot.totalLaps,
+      sessionType: snapshot.session.type,
+      result
+    })
+    return result
+  }
+}
+
+/** Derive the fuel coefficient for a session (physical default outside races). */
+export const estimateFuelCoefficient = memoizeOnLapInputs(computeFuelCoefficient)
 
 /**
  * Normalise a lap time to the end-of-race (near-empty) fuel reference. A no-op

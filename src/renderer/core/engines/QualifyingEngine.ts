@@ -1,4 +1,4 @@
-import type { RaceSnapshot } from '@renderer/core/providers/types'
+import type { RaceSnapshot } from '@renderer/core/model/snapshot'
 import type { LapSample, SectorState } from '@shared/models'
 
 export type QualifyingRunState = 'HOT LAP' | 'PREP LAP' | 'COOLDOWN' | 'OUT LAP' | 'IN PITS' | 'READY' | 'OUT'
@@ -248,10 +248,29 @@ function clamp(value: number, minimum: number, maximum: number): number {
   return Math.max(minimum, Math.min(maximum, value))
 }
 
-function inferStage(snapshot: RaceSnapshot): 1 | 2 | 3 {
+/**
+ * The qualifying segment the snapshot is in: the feed's segment when present, else a
+ * "Q1/Q2/Q3" token in the session name. Null when neither says, so callers that must
+ * not guess (alerts) can stay silent.
+ */
+export function resolveQualifyingStage(snapshot: RaceSnapshot): 1 | 2 | 3 | null {
   if (snapshot.qualifyingPart) return snapshot.qualifyingPart
   const match = /\bQ([123])\b/i.exec(snapshot.session.name)
-  return match ? (Number(match[1]) as 1 | 2 | 3) : 1
+  return match ? (Number(match[1]) as 1 | 2 | 3) : null
+}
+
+/**
+ * First classified position that is inside the elimination zone (the position just
+ * after the safe cutline `qualifyingCutoff` reports), or null when nobody is
+ * eliminated in that segment. The single source of truth for "at risk" rows.
+ */
+export function qualifyingDropZoneFrom(stage: 1 | 2 | 3, gridSize: number): number | null {
+  const cutoff = qualifyingCutoff(stage, gridSize)
+  return cutoff == null ? null : cutoff + 1
+}
+
+function inferStage(snapshot: RaceSnapshot): 1 | 2 | 3 {
+  return resolveQualifyingStage(snapshot) ?? 1
 }
 
 export function classifyQualifyingRunState(

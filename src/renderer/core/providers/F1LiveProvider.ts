@@ -1,29 +1,15 @@
 import type {
-  CurrentTyre,
   Driver,
-  DriverSessionBests,
-  DriverTyreStintHistory,
-  LapPositionSeries,
   LapSample,
-  PitLaneTime,
-  PositionSample,
-  RaceControlMessage,
   SessionInfo,
-  Stint,
-  TeamRadioClip,
-  TelemetrySample,
-  TimingEntry,
-  WeatherSample
+  TelemetrySample
 } from '@shared/models'
 import { clamp } from '@renderer/lib/utils'
 import { hasBridge, bridge } from '@renderer/lib/ipc'
-import { persist } from '@renderer/store/persist'
-import { STORE_NS } from '@shared/ipc-contract'
 import {
   deepMergeF1,
-  indexedToArray,
-  CAR_CHANNELS,
-  ch45ToAeroMode,
+  LIVE_CAPPED_TOPICS,
+  LIVE_HIGH_RATE_RETENTION,
   parseSessionClock,
   sessionClockRemainingAt,
   type F1SessionData,
@@ -38,44 +24,22 @@ import type {
   RaceSnapshot,
   SessionTimeline
 } from './types'
-import { buildTimeline } from '@renderer/core/engines/SessionPhaseEngine'
-import {
-  initErsState,
-  integrateErs,
-  startLap,
-  computeErsEstimate,
-  applyOvertakeEligibility,
-  deriveEnergyTrend,
-  explainOvertakeEligibility,
-  eligibilityDurationSec,
-  type ErsDriverState,
-  type ErsEstimate,
-  type ErsTelemetrySample
-} from '@renderer/core/engines/ErsEstimator'
 import { nearestAtOrBefore } from './normalize'
 import {
-  buildClosedTrackPath,
-  buildStints,
-  buildTiming,
-  buildTrackPath,
   debugTrackTraceInfo,
   collectRaceControl,
-  currentStint,
   lapCountAt,
   lapRecordToSample,
+  buildTiming,
   normalizeDrivers,
   normalizeSessionInfo,
-  parseLapTime,
-  positionCoordinatesAt,
   positionAvailability,
   buildLapPositions,
   buildSessionBests,
   collectPitLaneTimes,
-  pitLapIndex,
   collectTeamRadio,
   buildCurrentTyres,
   applyCurrentTyres,
-  applyCurrentTyresToStints,
   buildTyreStintHistory,
   mergeTopThreeDrivers,
   latestTrackMessage,
@@ -84,81 +48,39 @@ import {
   weatherAt,
   type LapRecord
 } from './f1normalize'
-import { isF1SessionLive } from '@shared/f1-session-state'
-import { FeedMemo } from './FeedMemo'
+import { DRIVER_FEED_TOPICS, DriverFeedTracker } from './DriverFeedTracker'
+import { FeedQualityTracker } from './f1/FeedQualityTracker'
+import { renderScheduler, yieldToRenderer } from './f1/scheduler'
+import {
+  TRACK_PATH_CACHE_SCHEMA_VERSION,
+  TrackPathCache,
+  type TrackPathCacheStorage
+} from './f1/trackPathCache'
+import { persistTrackPathStorage, saveBoundedTrackPath } from './f1/persistTrackPathStorage'
+import { TrackOutline } from './f1/trackOutline'
+import { PitLapIndexCache } from './f1/pitLapIndexCache'
+import { positionsAt } from './f1/positions'
+import { appendToStream, computeFeedFreshness, stampFeedFreshness } from './f1/liveStreams'
+import {
+  CHECKPOINT_INTERVAL_SEC,
+  MAX_CHECKPOINTS,
+  ReplayView,
+  advanceView,
+  type MergeCheckpoint
+} from './f1/replay'
+import { attachErs, integrateErsBatch, newErsBuild, trimErsPoints, type ErsPoint } from './f1/ers'
+import { appendLapHistory, newDriverBuild, newLapBuild } from './f1/lapHistory'
+import { buildSessionTimeline, deriveTotalLaps } from './f1/sessionTimeline'
+import { hasUsableCarData, telemetryWindow } from './f1/carData'
+import { listF1Sessions } from './f1/sessionList'
+import { isSessionDataLive } from './f1/sessionLive'
+import { weatherHistoryUpTo } from './f1/weatherHistory'
+import { EnrichmentLoader } from './f1/enrichmentLoader'
 
-const PRECOMPUTE_YIELD_EVERY = 400
-const ENRICHMENT_CHUNK_LIMIT = 500 // matches the main-process hard maximum
-const ENRICHMENT_EARLY_CHUNK_LIMIT = 250 // finer early Position chunks → earlier closed-lap checks
-const ENRICHMENT_EARLY_CHUNK_WINDOW = 1_000 // points; covers a formation lap + first racing lap
+// Live in ./f1/*; re-exported so importers keep reaching them through this module.
+export { TRACK_PATH_CACHE_SCHEMA_VERSION, saveBoundedTrackPath, renderScheduler }
+
 const ENRICHMENT_NOTIFY_MIN_MS = 300 // bound snapshot fan-out while chunks stream in
-/**
- * Upper bound accepted from the persisted outline cache. Matches the tracer's
- * own point budget, so a trace of a long circuit is not rejected on read-back.
- */
-const TRACK_PATH_CACHE_MAX = 700
-
-/**
- * Minimum downsampled points before an UNCLOSED trace is shown as a
- * best-effort map outline. Real inter-sample spacing is large enough (≈45m
- * at racing speed against the ~150-unit thinning distance) that 30 points
- * already represents a genuinely track-shaped arc, not just the first couple
- * of live polls' worth of noise.
- */
-const MIN_OPEN_TRACE_POINTS = 30
-
-/**
- * Bump when the shape of a cached track-path entry changes, OR when the
- * closure algorithm that PRODUCES it changes — a path cached by an older,
- * buggier closer is a stale-shaped entry too, even though it still parses.
- * Included in the cache key so it's treated as a miss (rebuilt from live
- * position data with the current algorithm) rather than silently misread.
- *
- * Bumped 1 -> 2: `buildClosedTrackPath` used to close only against `path[0]`
- * (wherever tracking happened to start), so anyone connecting mid-session
- * could get a false "closed" match on a short, wrong arc near that arbitrary
- * point (or never close at all) — either way, a wrong shape could get cached
- * and then permanently reused (`trackPathClosed` blocks recompute) even
- * after the closure algorithm itself was fixed to check every earlier point.
- *
- * Bumped 2 -> 3: `buildClosedTrackPath` used to return the FIRST valid
- * closure found (smallest search index), not the best one. A pit lane
- * commonly runs close to the main straight, so a reference car that pitted
- * early could close on that short loop before the true lap ever did — and a
- * wrong, incomplete outline (cars racing on the untraced rest of the
- * circuit rendering outside it) got cached exactly like a correct one.
- */
-export const TRACK_PATH_CACHE_SCHEMA_VERSION = 3
-
-/**
- * Renderer-side retention for CarData/Position, matching the socket's own cap
- * (~5 hours of running at the ~1 Hz these feeds arrive at). Scrubbing back
- * beyond it loses telemetry and car positions; all timing history is kept.
- */
-const LIVE_HIGH_RATE_RETENTION = 20_000
-const LIVE_CAPPED_TOPICS = new Set(['CarData', 'Position'])
-
-/**
- * Cooperative yield between preprocessing chunks. `scheduler.yield()` (or a
- * MessageChannel hop) resumes in ~0.1 ms; `setTimeout(0)` is clamped to ~4 ms
- * once nested, which adds up over the dozens of yields a session load takes.
- * Exported as an object so tests can observe/replace the yield.
- */
-export const renderScheduler = {
-  yieldToRenderer: (): Promise<void> => {
-    const scheduler = (globalThis as { scheduler?: { yield?: () => Promise<void> } }).scheduler
-    if (scheduler?.yield) return scheduler.yield.call(scheduler)
-    return new Promise<void>((resolve) => {
-      const channel = new MessageChannel()
-      channel.port1.onmessage = () => {
-        channel.port1.close()
-        resolve()
-      }
-      channel.port2.postMessage(null)
-    })
-  }
-}
-const yieldToRenderer = (): Promise<void> => renderScheduler.yieldToRenderer()
 
 /**
  * F1LiveProvider — real Formula 1 data from F1's OWN official timing archive
@@ -197,8 +119,7 @@ export class F1LiveProvider implements DataProvider {
   private timingStatsPoints: F1StreamPoint[] = []
   private topThreePoints: F1StreamPoint[] = []
   private pitLanePoints: F1StreamPoint[] = []
-  private pitLapIndexCache: { in: Set<string>; out: Set<string> } | undefined
-  private pitLapIndexPoints = -1
+  private pitLapIndexCache = new PitLapIndexCache()
   private teamRadioPoints: F1StreamPoint[] = []
   private currentTyrePoints: F1StreamPoint[] = []
   private tyreStintSeriesPoints: F1StreamPoint[] = []
@@ -209,16 +130,21 @@ export class F1LiveProvider implements DataProvider {
 
   private lapsByDriver = new Map<number, LapRecord[]>()
   private totalLaps: number | null = null
-  private trackPath: { x: number; y: number }[] = []
   /**
-   * Has `trackPath` been proven to be a complete lap?
-   *
-   * Only a closed trace is a circuit; a partial one is the squiggle a single car
-   * happened to drive so far. Once true the outline is final for the session and
-   * is never recomputed — which also stops a live poll from spending O(all
-   * positions) rebuilding it several times a second.
+   * The circuit outline and the state that decides when it may change (a closed
+   * trace is final for the session). Replaced wholesale at a fresh session.
    */
-  private trackPathClosed = false
+  private outline = new TrackOutline()
+  /** Whether the outline has been proven to be a complete lap. */
+  private get trackPathClosed(): boolean {
+    return this.outline.closed
+  }
+  /**
+   * Stream arrays this provider has copied and therefore owns, so later live
+   * deltas can be appended in place. An array that arrived from the socket (or a
+   * caller) is never mutated: the first append copies it, once.
+   */
+  private ownedStreams = new WeakSet<F1StreamPoint[]>()
   private timelineCache: SessionTimeline | null = null
   private sessionLoadVersion = 0
   private updateListeners = new Set<() => void>()
@@ -230,6 +156,10 @@ export class F1LiveProvider implements DataProvider {
    * while polling `live`; cleared whenever a non-live session loads.
    */
   private feedLastWallClockMs: Record<string, number> = {}
+  /** Per-driver counterpart of `feedLastWallClockMs`; live only, reset with it. */
+  private driverFeeds = new DriverFeedTracker()
+  /** Feed shape anomaly counts (diagnostic only; never alters the data). */
+  private feedQuality = new FeedQualityTracker()
   private telemetryAvailable = false
   /**
    * Rolling forward-scan state for lap history / drivers, kept across CONTINUING
@@ -254,99 +184,80 @@ export class F1LiveProvider implements DataProvider {
    * throttle/brake telemetry (harvest under braking, deploy under power) — always
    * surfaced with `energyIsEstimate: true`. Empty when CarData is unavailable.
    */
-  private ersPoints: { t: number; byDriver: Record<number, ErsEstimate> }[] = []
-
-  /**
-   * Clock at which each driver's Overtake eligibility most recently began.
-   * Not a replayable timeline (see `ErsEstimator.eligibilityDurationSec`) —
-   * just enough state to answer "how long has this held" during forward
-   * playback, the normal way a session is watched.
-   */
-  private eligibleSinceClock = new Map<number, number>()
+  private ersPoints: ErsPoint[] = []
 
   /** Diagnostics (APP_IMPROVEMENT_ROADMAP.md P2 item 32) — set during loadSession/enrichment. */
   private trackPathCacheStatus: 'hit' | 'miss' | 'unavailable' = 'unavailable'
+  private readonly trackPathCache: TrackPathCache
   private enrichmentIssue: { feed: 'position' | 'carData'; message: string } | null = null
+  /** The chunked Position/CarData download and its progress; chunks apply to this provider. */
+  private enrichment = new EnrichmentLoader({
+    loadVersion: () => this.sessionLoadVersion,
+    sessionId: () => this.session?.id,
+    positionsPublished: () => this.positionsPublished,
+    duration: () => this.getDuration(),
+    timingPointCount: () => this.timingPoints.length,
+    appendTiming: async (points, loadVersion) => {
+      this.feedQuality.observe('TimingData', points)
+      this.timingPoints.push(...points)
+      await this.appendLapHistory(loadVersion)
+    },
+    completeTiming: (duration) => {
+      this.publishStream('TimingData', this.timingPoints, duration, { partialTiming: false })
+      this.timelineCache = this.buildSessionTimeline(this.lapBuild.qualifyingParts)
+    },
+    appendPosition: (points, done, duration) => this.appendPositionPoints(points, done, duration),
+    appendCarData: (points, done, duration, loadVersion) =>
+      this.appendCarDataPoints(points, done, duration, loadVersion),
+    recordIssue: (issue) => {
+      this.enrichmentIssue = issue
+    },
+    notify: (force) => this.notifyEnrichmentProgress(force)
+  })
 
   /** Rolling ERS integration state, so telemetry batches integrate as they stream. */
   private ersBuild = newErsBuild()
 
-  // Forward-merge cursor (re-used across playback ticks; reset on backward seek).
-  private cursorT = -1
-  private tIdx = 0
-  private aIdx = 0
-  private mergedTiming: unknown = {}
-  private mergedApp: unknown = {}
-  private appStateVersion = 0
-  private stintCacheVersion = -1
-  private stintCache: Stint[] = []
-  private lapCacheKey = ''
-  private lapCache: LapSample[] = []
-
   /**
-   * One memo per whole-feed derivation in `getSnapshotAt`. Each of these used to
-   * rescan (and mostly deep-merge) its entire stream on every snapshot, four
-   * times a second, so their combined cost grew without bound as a session ran.
-   * See FeedMemo for why the prefix length plus the last point is a sound key.
+   * Two independent replay cursors over the same immutable feed. The playhead
+   * advances a little each tick; `wholeSession` answers end-of-session requests
+   * (bookmarks, exports, the sync engine's race-control history). Sharing one
+   * cursor made each of those requests drag it to the end, so the next tick paid
+   * a full re-merge and the two callers overwrote each other's memos.
    */
-  private memoRaceControl = new FeedMemo<RaceControlMessage[]>()
-  private memoDrivers = new FeedMemo<Driver[]>()
-  private memoCurrentTyres = new FeedMemo<CurrentTyre[]>()
-  private memoTyreStintHistory = new FeedMemo<DriverTyreStintHistory[]>()
-  private memoWeatherHistory = new FeedMemo<WeatherSample[]>()
-  private memoLapPositions = new FeedMemo<LapPositionSeries[]>()
-  private memoSessionBests = new FeedMemo<DriverSessionBests[]>()
-  private memoPitLaneTimes = new FeedMemo<PitLaneTime[]>()
-  private memoTeamRadio = new FeedMemo<TeamRadioClip[]>()
-  private memoTrackMessage = new FeedMemo<string | null>()
+  private playhead = new ReplayView()
+  private wholeSession = new ReplayView()
+  /** Merged-state snapshots at ascending session times, shared by both cursors. */
+  private checkpoints: MergeCheckpoint[] = []
+  private checkpointIntervalSec = CHECKPOINT_INTERVAL_SEC
+  private maxCheckpoints = MAX_CHECKPOINTS
 
-  private resetFeedMemos(): void {
-    this.memoRaceControl.reset()
-    this.memoDrivers.reset()
-    this.memoCurrentTyres.reset()
-    this.memoTyreStintHistory.reset()
-    this.memoWeatherHistory.reset()
-    this.memoLapPositions.reset()
-    this.memoSessionBests.reset()
-    this.memoPitLaneTimes.reset()
-    this.memoTeamRadio.reset()
-    this.memoTrackMessage.reset()
+  /** The playhead's cursor time — kept across continuing live polls. */
+  private get cursorT(): number {
+    return this.playhead.cursorT
   }
 
-  async listSessions(): Promise<SessionInfo[]> {
-    if (!hasBridge()) return []
-    const year = new Date().getUTCFullYear()
-    const years = [year, year - 1]
-    const all: SessionInfo[] = []
-    for (const y of years) {
-      try {
-        const list = await bridge().f1.listSessions(y)
-        for (const s of list) {
-          all.push({
-            id: s.path,
-            meetingId: String(s.key),
-            name: s.name,
-            type: mapType(s.type),
-            meetingName: s.meetingName,
-            circuitName: s.circuitShortName,
-            circuitShortName: s.circuitShortName,
-            countryName: s.countryName,
-            countryCode: s.countryCode,
-            location: s.location,
-            dateStart: s.startDate,
-            dateEnd: s.endDate,
-            gmtOffset: s.gmtOffset,
-            year: s.year,
-            totalLaps: null,
-            provider: 'f1live'
-          })
-        }
-      } catch {
-        /* skip a year that fails */
-      }
-      if (all.length > 0) break // latest season with data is enough
-    }
-    return all.sort((a, b) => Date.parse(b.dateStart ?? '') - Date.parse(a.dateStart ?? ''))
+  /** Drop everything derived from the previous session's feeds (fresh-session boundary). */
+  private resetFeedMemos(): void {
+    this.playhead.resetDerived()
+    this.wholeSession.resetDerived()
+  }
+
+  /** A superseded load must stop before it touches the next session's state. */
+  private assertCurrent(loadVersion: number): void {
+    if (loadVersion !== this.sessionLoadVersion) throw new Error('F1 session load was superseded.')
+  }
+
+  /**
+   * `trackPathStorage` is injected by `DataProviderManager`; it defaults to the persisted
+   * store so a bare `new F1LiveProvider()` keeps caching outlines as it always has.
+   */
+  constructor(options: { trackPathStorage?: TrackPathCacheStorage } = {}) {
+    this.trackPathCache = new TrackPathCache(options.trackPathStorage ?? persistTrackPathStorage)
+  }
+
+  listSessions(): Promise<SessionInfo[]> {
+    return listF1Sessions()
   }
 
   async loadSession(sessionId: string): Promise<SessionInfo> {
@@ -360,6 +271,7 @@ export class F1LiveProvider implements DataProvider {
       // A replay's clock isn't wall-clock time, so stale live timestamps must
       // not leak into (or persist stale into) a later live view.
       this.feedLastWallClockMs = {}
+      this.driverFeeds.reset()
     }
     // `live` pulls the accumulated real-time buffer; otherwise the archive.
     let data: F1SessionData | null
@@ -367,8 +279,7 @@ export class F1LiveProvider implements DataProvider {
     let cachedTrackPath: Promise<{ x: number; y: number }[] | null> | null = null
     if (sessionId === 'live') {
       const delta = await bridge().f1.getLive(this.liveCursors, this.liveGeneration)
-      if (loadVersion !== this.sessionLoadVersion)
-        throw new Error('F1 session load was superseded.')
+      this.assertCurrent(loadVersion)
       const merged = this.mergeLiveDelta(delta)
       data = merged.data
       continuing = merged.continuing
@@ -376,27 +287,26 @@ export class F1LiveProvider implements DataProvider {
       // outline traced during an earlier session at this circuit can seed the
       // map now instead of waiting for a car to complete a lap on the feed.
       if (data && !continuing) {
-        cachedTrackPath = this.loadCachedTrackPath(sessionId, data.summary.feedPath)
+        cachedTrackPath = this.trackPathCache.load(sessionId, data.summary.feedPath)
       }
     } else {
-      cachedTrackPath = this.loadCachedTrackPath(sessionId)
+      cachedTrackPath = this.trackPathCache.load(sessionId)
       data = await bridge().f1.loadSession(sessionId)
-      if (loadVersion !== this.sessionLoadVersion)
-        throw new Error('F1 session load was superseded.')
+      this.assertCurrent(loadVersion)
+      this.feedQuality.reset()
+      if (data) this.feedQuality.observeStreams(data.streams)
     }
     if (!data) throw new Error('Not connected to F1 live timing yet — sign in and connect first.')
     const session = await this.ingest(data, loadVersion, continuing)
-    if (loadVersion !== this.sessionLoadVersion) throw new Error('F1 session load was superseded.')
+    this.assertCurrent(loadVersion)
     if (cachedTrackPath) {
       // A previous session of this race weekend already proved the circuit
       // outline (one meeting = one layout). Reusing it lets the map publish
       // with the FIRST position chunk instead of waiting for a closed lap.
       const cached = await cachedTrackPath
-      if (loadVersion !== this.sessionLoadVersion)
-        throw new Error('F1 session load was superseded.')
+      this.assertCurrent(loadVersion)
       if (cached && !this.trackPathClosed) {
-        this.trackPath = cached
-        this.trackPathClosed = true
+        this.outline.seed(cached)
         this.trackPathCacheStatus = 'hit'
       } else if (!cached) {
         this.trackPathCacheStatus = 'miss'
@@ -406,30 +316,11 @@ export class F1LiveProvider implements DataProvider {
     if (sessionId !== 'live' && data.partialTiming) {
       // The timing tail is still downloading: stream and preprocess it before
       // the session counts as loaded, so "loaded" still means fully scrubable.
-      await this.streamCoreTiming(sessionId, loadVersion)
-      if (loadVersion !== this.sessionLoadVersion)
-        throw new Error('F1 session load was superseded.')
+      await this.enrichment.streamCoreTiming(sessionId, loadVersion)
+      this.assertCurrent(loadVersion)
     }
-    if (sessionId !== 'live') void this.loadEnrichment(sessionId, loadVersion)
+    if (sessionId !== 'live') void this.enrichment.load(sessionId, loadVersion)
     return session
-  }
-
-  /**
-   * Meeting-scoped store key: same weekend ⇒ same physical circuit layout.
-   *
-   * A LIVE session's id is the literal "live", which yields no meeting and so
-   * previously locked live sessions out of this cache in both directions — the
-   * live map had to wait for a car to complete a whole lap before an outline
-   * existed, even when the same circuit had just been replayed. `feedPath` is the
-   * live feed's own archive path, so live now shares the weekend's cache entry.
-   */
-  private trackPathCacheKey(sessionId: string, feedPath?: string | null): string | null {
-    const source = sessionId === 'live' ? (feedPath ?? '') : sessionId
-    const segments = source.split('/').filter(Boolean)
-    if (segments.length < 2) return null
-    // electron-store paths split on dots; keep the key flat.
-    const meetingKey = segments.slice(0, 2).join('/').replace(/\./g, '_')
-    return `v${TRACK_PATH_CACHE_SCHEMA_VERSION}/${meetingKey}`
   }
 
   /**
@@ -446,92 +337,16 @@ export class F1LiveProvider implements DataProvider {
     return summary.path && summary.path !== 'live' ? summary.path : null
   }
 
-  private async loadCachedTrackPath(
-    sessionId: string,
-    feedPath?: string | null
-  ): Promise<{ x: number; y: number }[] | null> {
-    try {
-      const key = this.trackPathCacheKey(sessionId, feedPath)
-      if (!key) return null
-      const value = await persist.get<unknown>(STORE_NS.TRACK_PATHS, key)
-      if (!Array.isArray(value) || value.length < 20 || value.length > TRACK_PATH_CACHE_MAX)
-        return null
-      const path: { x: number; y: number }[] = []
-      for (const raw of value) {
-        const point = rec(raw)
-        const x = point.x
-        const y = point.y
-        if (typeof x !== 'number' || typeof y !== 'number' || !isFinite(x) || !isFinite(y))
-          return null
-        path.push({ x, y })
-      }
-      const first = path[0]
-      const last = path[path.length - 1]
-      if (!first || !last || first.x !== last.x || first.y !== last.y) return null
-      return path
-    } catch {
-      return null
-    }
-  }
-
-  /**
-   * Take the circuit outline as far as the positions seen so far allow, and
-   * never take a step backwards. Returns true if the outline changed.
-   *
-   * The rule is that only a CLOSED trace — one where the reference car returned
-   * to where it started after covering a plausible lap — may be shown or cached.
-   *
-   * This used to run unconditionally on every ingest, which broke the live map
-   * in two ways. A live poll arrives every couple of seconds with only a few
-   * minutes of positions behind it, so the rebuilt trace was whatever partial
-   * squiggle one car had driven; it was published as the circuit, and (once past
-   * 20 points) written to the weekend's outline cache, corrupting it for every
-   * later session at the same track. It also overwrote the good cached outline
-   * loaded moments earlier, so seeding the map from an earlier session never
-   * actually worked.
-   *
-   * `allowOpenFallback` now applies to LIVE too, not just a fully downloaded
-   * archive: a strict "closed loop or nothing" map is only as good as the
-   * closure math, and if that math ever fails to close on some circuit/session
-   * shape it never previously exercised, the map has no way to recover —
-   * exactly the failure mode this exists to end. The corruption risk above is
-   * structurally avoided regardless: `saveTrackPathCache` is only ever called
-   * from the CLOSED branch, so an open trace is shown but never cached, live or
-   * not. `MIN_OPEN_TRACE_POINTS` still guards against publishing the "whatever
-   * partial squiggle" from the first couple of polls — only a trace substantial
-   * enough to actually look like part of a circuit gets shown; closure is still
-   * attempted first on every poll and silently upgrades the map the moment it
-   * succeeds.
-   */
-  private adoptTrackPath(allowOpenFallback: boolean): boolean {
-    if (this.trackPathClosed) return false
-    const closed = buildClosedTrackPath(this.positionPoints)
-    if (closed && closed.length > 0) {
-      this.trackPath = closed
-      this.trackPathClosed = true
-      this.saveTrackPathCache(closed)
-      return true
-    }
-    if (!allowOpenFallback || this.trackPath.length > 0) return false
-    const open = buildTrackPath(this.positionPoints)
-    if (open.length < MIN_OPEN_TRACE_POINTS) return false
-    this.trackPath = open
-    return true
-  }
-
-  private saveTrackPathCache(path: { x: number; y: number }[]): void {
-    const sessionId = this.session?.id
-    if (!sessionId || path.length < 20) return
-    // Live sessions may now SAVE too (keyed by the feed's own path), so the
-    // outline traced during FP1 is instantly available to FP2 and the race.
-    const key = this.trackPathCacheKey(sessionId, this.currentFeedPath())
-    if (!key) return
-    void persist.set(STORE_NS.TRACK_PATHS, key, path).catch(() => undefined)
+  /** Adopt the best circuit outline the positions so far allow; true if it changed. */
+  private adoptTrackPath(allowOpenFallback: boolean, force = false): boolean {
+    return this.outline.adopt(this.positionPoints, allowOpenFallback, force, (path) =>
+      this.trackPathCache.save(this.session?.id, this.currentFeedPath(), path)
+    )
   }
 
   private publishPositionsIfReady(allowOpenFallback: boolean): boolean {
     if (this.positionsPublished || this.positionPoints.length === 0) return false
-    if (this.trackPath.length === 0 && !allowOpenFallback) return false
+    if (this.outline.path.length === 0 && !allowOpenFallback) return false
     this.positionsPublished = true
     return true
   }
@@ -549,29 +364,16 @@ export class F1LiveProvider implements DataProvider {
    * `ersProcessed` indexes into `carDataPoints`, so it moves with the trim —
    * otherwise the ERS integrator would skip exactly the discarded points'
    * worth of new telemetry.
+   *
+   * Trims `points` in place: the caller owns it (see `appendToStream`).
    */
-  private trimHighRateStream(topic: string, points: F1StreamPoint[]): F1StreamPoint[] {
-    if (points.length <= LIVE_HIGH_RATE_RETENTION) return points
+  private trimHighRateStream(topic: string, points: F1StreamPoint[]): void {
+    if (points.length <= LIVE_HIGH_RATE_RETENTION) return
     const dropped = points.length - LIVE_HIGH_RATE_RETENTION
-    if (topic === 'CarData') this.ersProcessed = Math.max(0, this.ersProcessed - dropped)
-    return points.slice(dropped)
-  }
-
-  /** Ms since each topic last received data, as of right now. */
-  private computeFeedFreshness(): Record<string, number> {
-    const now = Date.now()
-    const out: Record<string, number> = {}
-    for (const [topic, lastMs] of Object.entries(this.feedLastWallClockMs)) {
-      out[topic] = Math.max(0, now - lastMs)
-    }
-    return out
-  }
-
-  /** Record that these topics just received data, for stale-feed detection. */
-  private stampFeedFreshness(streams: Record<string, F1StreamPoint[]>): void {
-    const now = Date.now()
-    for (const [topic, points] of Object.entries(streams)) {
-      if (points.length > 0) this.feedLastWallClockMs[topic] = now
+    points.splice(0, dropped)
+    if (topic === 'CarData') {
+      this.ersProcessed = Math.max(0, this.ersProcessed - dropped)
+      trimErsPoints(this.ersPoints, points[0]?.t ?? Number.POSITIVE_INFINITY)
     }
   }
 
@@ -587,14 +389,24 @@ export class F1LiveProvider implements DataProvider {
     // `delta.streams` is either just-arrived new points (continuing) or the
     // full current buffer (first poll) — either way, every topic present here
     // just became current as of now.
-    this.stampFeedFreshness(delta.streams)
+    stampFeedFreshness(this.feedLastWallClockMs, delta.streams)
+    // A full buffer (first poll / new socket generation) replaces what was
+    // known; an increment only extends it.
+    if (!continuing) {
+      this.driverFeeds.reset()
+      this.feedQuality.reset()
+    }
+    this.feedQuality.observeStreams(delta.streams)
+    for (const topic of DRIVER_FEED_TOPICS) {
+      const points = delta.streams[topic]
+      if (points) this.driverFeeds.observe(topic, points, false)
+    }
     if (!continuing || !this.data) return { data: delta, continuing: false }
     const streams = { ...this.data.streams }
     for (const [topic, points] of Object.entries(delta.streams)) {
-      const merged = [...(streams[topic] ?? []), ...points]
-      streams[topic] = LIVE_CAPPED_TOPICS.has(topic)
-        ? this.trimHighRateStream(topic, merged)
-        : merged
+      const grown = appendToStream(this.ownedStreams, streams[topic], points)
+      if (LIVE_CAPPED_TOPICS.has(topic)) this.trimHighRateStream(topic, grown)
+      streams[topic] = grown
     }
     return {
       data: {
@@ -607,48 +419,6 @@ export class F1LiveProvider implements DataProvider {
     }
   }
 
-  /** Pull the still-downloading TimingData tail and preprocess it as it lands. */
-  private async streamCoreTiming(sessionId: string, loadVersion: number): Promise<void> {
-    let offset = this.timingPoints.length
-    let duration = this.data?.duration ?? 0
-    for (;;) {
-      const chunk = await bridge().f1.loadSessionEnrichment({
-        path: sessionId,
-        feed: 'timing',
-        carDataOffset: 0,
-        positionOffset: 0,
-        timingOffset: offset,
-        limit: ENRICHMENT_CHUNK_LIMIT
-      })
-      if (loadVersion !== this.sessionLoadVersion || this.session?.id !== sessionId) {
-        throw new Error('F1 session load was superseded.')
-      }
-      const points = chunk.timing ?? []
-      offset = chunk.nextTimingOffset ?? offset + points.length
-      duration = Math.max(duration, chunk.duration)
-      if (points.length > 0) {
-        this.timingPoints.push(...points)
-        await this.appendLapHistory(loadVersion)
-        if (loadVersion !== this.sessionLoadVersion)
-          throw new Error('F1 session load was superseded.')
-      }
-      if (chunk.done) break
-      await yieldToRenderer()
-      if (loadVersion !== this.sessionLoadVersion || this.session?.id !== sessionId) {
-        throw new Error('F1 session load was superseded.')
-      }
-    }
-    if (this.data) {
-      this.data = {
-        ...this.data,
-        duration: Math.max(this.data.duration, duration),
-        streams: { ...this.data.streams, TimingData: this.timingPoints },
-        partialTiming: false
-      }
-    }
-    this.timelineCache = this.buildSessionTimeline(this.lapBuild.qualifyingParts)
-  }
-
   onUpdate(listener: () => void): () => void {
     this.updateListeners.add(listener)
     return () => this.updateListeners.delete(listener)
@@ -656,10 +426,16 @@ export class F1LiveProvider implements DataProvider {
 
   cancelPendingLoads(): void {
     this.sessionLoadVersion++
+    // The superseded stream loops stop without reporting, so nothing else would
+    // ever move their feeds out of `loading`.
+    this.enrichment.reset()
   }
 
   getDiagnostics(): ProviderDiagnostics {
-    const trace = debugTrackTraceInfo(this.positionPoints)
+    const trace = debugTrackTraceInfo(
+      this.positionPoints,
+      this.outline.updateReferenceDriver(this.positionPoints)
+    )
     return {
       trackPathCacheStatus: this.trackPathCacheStatus,
       cacheSchemaVersion: TRACK_PATH_CACHE_SCHEMA_VERSION,
@@ -667,106 +443,28 @@ export class F1LiveProvider implements DataProvider {
       enrichmentIssue: this.enrichmentIssue
         ? `${this.enrichmentIssue.feed}: ${this.enrichmentIssue.message}`
         : null,
+      enrichmentProgress: this.enrichment.progress(),
       trackRawPointCount: trace.rawPointCount,
       trackReferenceDriver: trace.referenceDriver,
       trackOpenTraceLength: trace.openTraceLength,
-      trackAdoptedLength: this.trackPath.length,
-      trackPathClosed: this.trackPathClosed
-    }
-  }
-
-  private async loadEnrichment(sessionId: string, loadVersion: number): Promise<void> {
-    // Ordering guarantee: the map always publishes before telemetry STARTS.
-    // Once it has, CarData streams concurrently with the Position tail — the
-    // tail is only needed for scrubbing ahead, so telemetry no longer waits for
-    // the whole Position download.
-    let carDataStream: Promise<void> | null = null
-    const startCarData = (): void => {
-      if (carDataStream) return
-      carDataStream = this.streamEnrichmentFeed(sessionId, loadVersion, 'carData').catch(
-        (e: unknown) => {
-          // Telemetry is optional; core timing and the map remain fully usable.
-          // Still recorded (APP_IMPROVEMENT_ROADMAP.md P2 item 32/28) so a
-          // silent degrade is visible in diagnostics instead of reading as a freeze.
-          this.enrichmentIssue = {
-            feed: 'carData',
-            message: e instanceof Error ? e.message : 'Unknown error'
-          }
-        }
-      )
-    }
-    try {
-      await this.streamEnrichmentFeed(sessionId, loadVersion, 'position', () => {
-        if (this.positionsPublished) startCarData()
-      })
-    } catch (e) {
-      // Position is optional; telemetry can still enrich the timing session.
-      this.enrichmentIssue = {
-        feed: 'position',
-        message: e instanceof Error ? e.message : 'Unknown error'
-      }
-    }
-    if (loadVersion !== this.sessionLoadVersion || this.session?.id !== sessionId) return
-    startCarData()
-    await carDataStream
-  }
-
-  /**
-   * Pull one high-rate feed chunk-by-chunk and APPLY each chunk as it arrives.
-   * The main process serves chunks while the `.z` file is still downloading, so
-   * the map (and then telemetry) become usable at the replay start long before
-   * the feed's tail exists locally.
-   */
-  private async streamEnrichmentFeed(
-    sessionId: string,
-    loadVersion: number,
-    feed: 'position' | 'carData',
-    onApplied?: () => void
-  ): Promise<void> {
-    let offset = 0
-    let duration = 0
-    for (;;) {
-      // Position starts with finer chunks so the closed-lap check (and hence the
-      // map) can trigger as early in the download as possible.
-      const limit =
-        feed === 'position' && !this.positionsPublished && offset < ENRICHMENT_EARLY_CHUNK_WINDOW
-          ? ENRICHMENT_EARLY_CHUNK_LIMIT
-          : ENRICHMENT_CHUNK_LIMIT
-      const chunk = await bridge().f1.loadSessionEnrichment({
-        path: sessionId,
-        feed,
-        carDataOffset: feed === 'carData' ? offset : 0,
-        positionOffset: feed === 'position' ? offset : 0,
-        limit
-      })
-      if (loadVersion !== this.sessionLoadVersion || this.session?.id !== sessionId) return
-      const points = feed === 'position' ? chunk.position : chunk.carData
-      offset = feed === 'position' ? chunk.nextPositionOffset : chunk.nextCarDataOffset
-      duration = Math.max(duration, chunk.duration)
-      if (feed === 'position') this.appendPositionPoints(points, chunk.done, duration)
-      else await this.appendCarDataPoints(points, chunk.done, duration, loadVersion)
-      if (loadVersion !== this.sessionLoadVersion) return
-      onApplied?.()
-      if (chunk.done) return
-      await yieldToRenderer()
-      if (loadVersion !== this.sessionLoadVersion || this.session?.id !== sessionId) return
+      trackAdoptedLength: this.outline.path.length,
+      trackPathClosed: this.outline.closed,
+      feedQuality: this.feedQuality.report()
     }
   }
 
   private appendPositionPoints(points: F1StreamPoint[], done: boolean, duration: number): void {
-    if (points.length > 0) this.positionPoints.push(...points)
-    const gainedOutline = this.adoptTrackPath(done)
+    if (points.length > 0) {
+      this.feedQuality.observe('Position', points)
+      this.positionPoints.push(...points)
+    }
+    // The final chunk is the last chance to close the outline, so it is never throttled.
+    const gainedOutline = this.adoptTrackPath(done, done)
     // Markers publish as soon as there is an outline to place them on — or,
     // once the whole feed is in, even without one.
     let justPublished = this.publishPositionsIfReady(done)
     justPublished ||= gainedOutline
-    if (done && this.data) {
-      this.data = {
-        ...this.data,
-        duration: Math.max(this.data.duration, duration),
-        streams: { ...this.data.streams, Position: this.positionPoints }
-      }
-    }
+    if (done) this.publishStream('Position', this.positionPoints, duration)
     this.notifyEnrichmentProgress(done || justPublished)
   }
 
@@ -783,14 +481,24 @@ export class F1LiveProvider implements DataProvider {
       await this.integrateErsBatch(points, loadVersion)
       if (loadVersion !== this.sessionLoadVersion) return
     }
-    if (done && this.data) {
-      this.data = {
-        ...this.data,
-        duration: Math.max(this.data.duration, duration),
-        streams: { ...this.data.streams, CarData: this.carDataPoints }
-      }
-    }
+    if (done) this.publishStream('CarData', this.carDataPoints, duration)
     this.notifyEnrichmentProgress(done)
+  }
+
+  /** Fold a fully downloaded feed (and any longer duration) back into `data`. */
+  private publishStream(
+    topic: string,
+    points: F1StreamPoint[],
+    duration: number,
+    extra: Partial<F1SessionData> = {}
+  ): void {
+    if (!this.data) return
+    this.data = {
+      ...this.data,
+      duration: Math.max(this.data.duration, duration),
+      streams: { ...this.data.streams, [topic]: points },
+      ...extra
+    }
   }
 
   private notifyEnrichmentProgress(force: boolean): void {
@@ -812,8 +520,7 @@ export class F1LiveProvider implements DataProvider {
     expectedLoadVersion = this.sessionLoadVersion,
     continuing = false
   ): Promise<SessionInfo> {
-    if (expectedLoadVersion !== this.sessionLoadVersion)
-      throw new Error('F1 session load was superseded.')
+    this.assertCurrent(expectedLoadVersion)
     this.data = data
     this.session = normalizeSessionInfo(data.summary)
 
@@ -842,18 +549,16 @@ export class F1LiveProvider implements DataProvider {
       this.lapBuild = newLapBuild()
       this.driverBuild = newDriverBuild()
       this.lapsByDriver = new Map()
-      this.trackPath = []
-      this.trackPathClosed = false
-      this.pitLapIndexCache = undefined
-      this.pitLapIndexPoints = -1
+      this.outline = new TrackOutline()
+      this.pitLapIndexCache = new PitLapIndexCache()
       this.positionsPublished = false
       this.resetFeedMemos()
       this.ersBuild = newErsBuild()
       this.ersPoints = []
-      this.eligibleSinceClock = new Map()
       this.ersProcessed = 0
       this.trackPathCacheStatus = 'unavailable'
       this.enrichmentIssue = null
+      this.enrichment.reset()
       this.telemetryAvailable = hasUsableCarData(this.carDataPoints)
     } else if (!this.telemetryAvailable) {
       this.telemetryAvailable = hasUsableCarData(this.carDataPoints.slice(this.ersProcessed))
@@ -862,43 +567,44 @@ export class F1LiveProvider implements DataProvider {
     // Drivers = the merged DriverList (near-static keyframe); only new points merge.
     const driverBuild = this.driverBuild
     const driverList = s.DriverList ?? []
+    const driversProcessedBefore = driverBuild.processed
     while (driverBuild.processed < driverList.length) {
       driverBuild.state = deepMergeF1(driverBuild.state, driverList[driverBuild.processed].d)
       driverBuild.processed += 1
     }
-    this.drivers = normalizeDrivers(driverBuild.state)
+    // Re-normalizing yields an equal but NEW array, which invalidated the drivers
+    // memo and every downstream memo keyed on it on every poll. Only a DriverList
+    // point actually merged (or a fresh session) can change the answer.
+    if (!continuing || driverBuild.processed !== driversProcessedBefore) {
+      this.drivers = normalizeDrivers(driverBuild.state)
+    }
 
-    this.totalLaps = this.deriveTotalLaps()
+    this.totalLaps = deriveTotalLaps(this.lapCountPoints)
     if (this.session) {
       this.session.totalLaps = this.session.type === 'race' ? this.totalLaps : null
     }
 
     await yieldToRenderer()
-    if (expectedLoadVersion !== this.sessionLoadVersion)
-      throw new Error('F1 session load was superseded.')
+    this.assertCurrent(expectedLoadVersion)
     await this.appendLapHistory(expectedLoadVersion)
-    if (expectedLoadVersion !== this.sessionLoadVersion)
-      throw new Error('F1 session load was superseded.')
+    this.assertCurrent(expectedLoadVersion)
     this.timelineCache = this.buildSessionTimeline(this.lapBuild.qualifyingParts)
     await yieldToRenderer()
-    if (expectedLoadVersion !== this.sessionLoadVersion)
-      throw new Error('F1 session load was superseded.')
+    this.assertCurrent(expectedLoadVersion)
     // Closure is still tried first and wins the moment it succeeds, live or
-    // not (`adoptTrackPath`) — the open trace is only ever a placeholder for
+    // not (`TrackOutline.adopt`) — the open trace is only ever a placeholder for
     // whichever poll shows up before that happens, never cached, and only
-    // adopted once it clears `MIN_OPEN_TRACE_POINTS`.
+    // adopted once it clears its minimum length.
     this.adoptTrackPath(true)
     this.publishPositionsIfReady(true)
     await yieldToRenderer()
-    if (expectedLoadVersion !== this.sessionLoadVersion)
-      throw new Error('F1 session load was superseded.')
+    this.assertCurrent(expectedLoadVersion)
     const newCarData =
       this.ersProcessed > 0 ? this.carDataPoints.slice(this.ersProcessed) : this.carDataPoints
     this.ersProcessed = this.carDataPoints.length
     if (newCarData.length > 0) {
       await this.integrateErsBatch(newCarData, expectedLoadVersion)
-      if (expectedLoadVersion !== this.sessionLoadVersion)
-        throw new Error('F1 session load was superseded.')
+      this.assertCurrent(expectedLoadVersion)
     }
     // A continuing live poll appends strictly newer points: the forward-merge
     // cursor stays valid and the next snapshot advances incrementally instead
@@ -918,73 +624,75 @@ export class F1LiveProvider implements DataProvider {
   getSnapshotAt(t: number): RaceSnapshot {
     if (!this.session) throw new Error('F1LiveProvider: no session loaded')
     const clock = clamp(t, 0, this.getDuration() || t)
-    this.advanceTo(clock)
+    const view = this.viewFor(clock)
+    this.advanceTo(view, clock)
 
-    const raceControl = this.memoRaceControl.read(this.raceControlPoints, clock, () =>
+    const raceControl = view.memos.raceControl.read(this.raceControlPoints, clock, () =>
       collectRaceControl(this.raceControlPoints, clock)
     )
     // TopThree independently names the leading drivers, recovering identity for
     // anyone the DriverList keyframe hasn't described yet.
-    const drivers = this.memoDrivers.read(
+    const drivers = view.memos.drivers.read(
       this.topThreePoints,
       clock,
       () => mergeTopThreeDrivers(this.drivers, this.topThreePoints, clock),
       [this.drivers]
     )
-    const timing = buildTiming(this.mergedTiming, this.mergedApp, drivers, raceControl)
-    const currentTyres = this.memoCurrentTyres.read(this.currentTyrePoints, clock, () =>
+    const timing = buildTiming(view.timing, view.app, drivers, raceControl)
+    const currentTyres = view.memos.currentTyres.read(this.currentTyrePoints, clock, () =>
       buildCurrentTyres(this.currentTyrePoints, clock)
     )
     applyCurrentTyres(timing, currentTyres)
-    this.attachErs(timing, clock)
-    const weatherHistory = this.memoWeatherHistory.read(this.weatherPoints, clock, () =>
-      this.weatherPoints
-        .filter((p) => p.t <= clock)
-        .map((p) => weatherAt(p))
-        .filter((w): w is WeatherSample => w !== null)
+    attachErs(timing, clock, this.ersPoints, view.eligibleSinceClock)
+    const weatherHistory = view.memos.weatherHistory.read(this.weatherPoints, clock, () =>
+      weatherHistoryUpTo(this.weatherPoints, clock)
     )
     const weather = weatherAt(nearestAtOrBefore(this.weatherPoints, clock, (p) => p.t))
     const lc = lapCountAt(nearestAtOrBefore(this.lapCountPoints, clock, (p) => p.t))
     const trackStatus = trackStatusAt(nearestAtOrBefore(this.trackStatusPoints, clock, (p) => p.t))
     const feedPath = this.currentFeedPath()
-    const positions = this.positionsAt(clock, timing)
+    const positions = positionsAt(this.positionPoints, this.positionsPublished, clock, timing)
     const availablePositions = positionAvailability(positions)
 
     const maxLapNo = Math.max(0, ...timing.map((e) => e.lapNumber ?? 0)) || null
     const currentLap = this.session.type === 'race' ? (lc.current ?? maxLapNo) : null
+    // Wall-clock ages exist only for a live session; a replay has nothing to be stale against.
+    const feedFreshness =
+      this.session.id === 'live' ? computeFeedFreshness(this.feedLastWallClockMs) : undefined
 
     return {
       session: this.session,
       drivers,
       timing,
-      laps: this.lapsUpTo(clock),
-      stints: applyCurrentTyresToStints(this.stintsAtCurrentState(), currentTyres),
+      laps: view.lapsUpTo(clock, this.lapsByDriver, this.pitLapIndex()),
+      stints: view.stintsWithTyres(view.stintsAtCurrentState(this.drivers), currentTyres),
       raceControl,
       weather,
       weatherHistory,
       positions,
-      trackPath: this.trackPath,
-      lapPositions: this.memoLapPositions.read(this.lapSeriesPoints, clock, () =>
+      trackPath: this.outline.path,
+      lapPositions: view.memos.lapPositions.read(this.lapSeriesPoints, clock, () =>
         buildLapPositions(this.lapSeriesPoints, clock)
       ),
-      sessionBests: this.memoSessionBests.read(this.timingStatsPoints, clock, () =>
+      sessionBests: view.memos.sessionBests.read(this.timingStatsPoints, clock, () =>
         buildSessionBests(this.timingStatsPoints, clock)
       ),
-      pitLaneTimes: this.memoPitLaneTimes.read(this.pitLanePoints, clock, () =>
+      pitLaneTimes: view.memos.pitLaneTimes.read(this.pitLanePoints, clock, () =>
         collectPitLaneTimes(this.pitLanePoints, clock)
       ),
-      teamRadio: this.memoTeamRadio.read(
+      teamRadio: view.memos.teamRadio.read(
         this.teamRadioPoints,
         clock,
         () => collectTeamRadio(this.teamRadioPoints, clock, feedPath),
         [feedPath]
       ),
       currentTyres,
-      tyreStintHistory: this.memoTyreStintHistory.read(this.tyreStintSeriesPoints, clock, () =>
+      tyreStintHistory: view.memos.tyreStintHistory.read(this.tyreStintSeriesPoints, clock, () =>
         buildTyreStintHistory(this.tyreStintSeriesPoints, clock)
       ),
-      feedFreshness: this.session.id === 'live' ? this.computeFeedFreshness() : undefined,
-      trackMessage: this.memoTrackMessage.read(this.tlaRcmPoints, clock, () =>
+      feedFreshness,
+      driverFreshness: feedFreshness ? this.driverFeeds.ages(feedFreshness) : undefined,
+      trackMessage: view.memos.trackMessage.read(this.tlaRcmPoints, clock, () =>
         latestTrackMessage(this.tlaRcmPoints, clock)
       ),
       availability: {
@@ -997,21 +705,13 @@ export class F1LiveProvider implements DataProvider {
         positions: this.positionsPublished,
         positionProgress: availablePositions.positionProgress,
         telemetry: this.telemetryAvailable,
-        live: this.data
-          ? isF1SessionLive({
-              path: this.data.summary.path,
-              archiveStatus: this.data.summary.archiveStatus,
-              startDate: this.data.summary.startDate,
-              endDate: this.data.summary.endDate,
-              liveStreamActive: this.data.summary.liveStreamActive
-            })
-          : false
+        live: isSessionDataLive(this.data)
       },
       clock,
       currentLap,
       totalLaps: this.totalLaps,
       trackStatus,
-      qualifyingPart: qualifyingPartAt(this.mergedTiming),
+      qualifyingPart: qualifyingPartAt(view.timing),
       sessionClock: sessionClockRemainingAt(this.sessionClockPoints, clock)
     }
   }
@@ -1021,19 +721,9 @@ export class F1LiveProvider implements DataProvider {
     return (this.lapsByDriver.get(driverNumber) ?? []).map((r) => lapRecordToSample(r, pitLaps))
   }
 
-  /**
-   * F1's own statement of which laps were pit in-/out-laps, when the feed
-   * carries it. Recomputed only when new pit entries arrive.
-   */
+  /** F1's own pit in-/out-lap statement, when the feed carries it (see `PitLapIndexCache`). */
   private pitLapIndex(): { in: Set<string>; out: Set<string> } | undefined {
-    const points = this.pitLanePoints
-    if (points.length === 0) return undefined
-    if (this.pitLapIndexCache && this.pitLapIndexPoints === points.length) {
-      return this.pitLapIndexCache
-    }
-    this.pitLapIndexPoints = points.length
-    this.pitLapIndexCache = pitLapIndex(collectPitLaneTimes(points, Infinity))
-    return this.pitLapIndexCache
+    return this.pitLapIndexCache.get(this.pitLanePoints)
   }
 
   getTimeline(): SessionTimeline {
@@ -1042,483 +732,67 @@ export class F1LiveProvider implements DataProvider {
   }
 
   private buildSessionTimeline(qualifyingParts: { t: number; part: 1 | 2 | 3 }[]): SessionTimeline {
-    const trackStatus = this.trackStatusPoints.map((p) => ({ t: p.t, status: trackStatusAt(p) }))
-    const lapCount = this.lapCountPoints.map((p) => {
-      const lc = lapCountAt(p)
-      return { t: p.t, current: lc.current, total: lc.total }
-    })
-    const chequeredTimes = this.findChequeredTimes()
-    const qualifyingPhaseEnds = qualifyingParts.flatMap((part, index) => {
-      const nextStart = qualifyingParts[index + 1]?.t ?? Number.POSITIVE_INFINITY
-      const end = chequeredTimes.find((time) => time >= part.t && time < nextStart)
-      return end == null ? [] : [{ t: end, part: part.part }]
-    })
-    return buildTimeline({
-      duration: this.getDuration(),
-      type: this.session?.type ?? 'unknown',
-      trackStatus,
-      lapCount,
-      qualifyingParts,
-      qualifyingPhaseEnds,
-      chequeredHint: chequeredTimes[chequeredTimes.length - 1] ?? null
-    })
-  }
-
-  /** Feed times (s) of chequered flags, including Q1/Q2/Q3 phase ends. */
-  private findChequeredTimes(): number[] {
-    const times: number[] = []
-    for (const p of this.raceControlPoints) {
-      const msgs = rec(p.d).Messages
-      const list = Array.isArray(msgs) ? msgs : indexedToArray(msgs)
-      for (const raw of list) {
-        const m = rec(raw)
-        const flag = String(m.Flag ?? '').toUpperCase()
-        const text = String(m.Message ?? '').toUpperCase()
-        if (flag === 'CHEQUERED' || text.includes('CHEQUERED') || text.includes('CHECKERED')) {
-          if (times[times.length - 1] !== p.t) times.push(p.t)
-          break
-        }
-      }
-    }
-    return times
+    return buildSessionTimeline(
+      {
+        trackStatusPoints: this.trackStatusPoints,
+        lapCountPoints: this.lapCountPoints,
+        raceControlPoints: this.raceControlPoints,
+        duration: this.getDuration(),
+        type: this.session?.type ?? 'unknown'
+      },
+      qualifyingParts
+    )
   }
 
   getTelemetry(driverNumber: number, t: number, windowSec = 8): TelemetrySample[] {
-    const key = String(driverNumber)
-    const lo = t - windowSec
-    const out: TelemetrySample[] = []
-    // Binary-search the window start; a linear scan re-walks the whole session
-    // on every widget render once the playhead is deep into a race.
-    let low = 0
-    let high = this.carDataPoints.length
-    while (low < high) {
-      const mid = (low + high) >> 1
-      if (this.carDataPoints[mid].t < lo) low = mid + 1
-      else high = mid
-    }
-    for (let i = low; i < this.carDataPoints.length; i++) {
-      const p = this.carDataPoints[i]
-      if (p.t > t) break
-      const entries = indexedToArray(rec(p.d).Entries)
-      for (const e of entries) {
-        const car = rec(rec(rec(e).Cars)[key]).Channels
-        if (!car) continue
-        const ch = rec(car)
-        const drs = num(ch[CAR_CHANNELS.drs])
-        out.push({
-          driverNumber,
-          date: new Date(p.t * 1000).toISOString(),
-          speed: num(ch[CAR_CHANNELS.speed]),
-          throttle: num(ch[CAR_CHANNELS.throttle]),
-          brake: num(ch[CAR_CHANNELS.brake]),
-          gear: num(ch[CAR_CHANNELS.gear]),
-          rpm: num(ch[CAR_CHANNELS.rpm]),
-          drs,
-          drsActive: drs != null && [10, 12, 14].includes(drs),
-          aeroMode: ch45ToAeroMode(drs)
-        })
-      }
-    }
-    return out
+    return telemetryWindow(this.carDataPoints, driverNumber, t, windowSec)
   }
 
   // ── reconstruction internals ────────────────────────────────────────────────
 
   private resetCursor(): void {
-    this.cursorT = -1
-    this.tIdx = 0
-    this.aIdx = 0
-    this.mergedTiming = {}
-    this.mergedApp = {}
-    this.appStateVersion = 0
-    this.stintCacheVersion = -1
-    this.stintCache = []
-    this.lapCacheKey = ''
-    this.lapCache = []
-  }
-
-  /** Advance the forward-merge cursor to session time `clock`. */
-  private advanceTo(clock: number): void {
-    if (clock < this.cursorT) this.resetCursor()
-    while (this.tIdx < this.timingPoints.length && this.timingPoints[this.tIdx].t <= clock) {
-      this.mergedTiming = deepMergeF1(this.mergedTiming, this.timingPoints[this.tIdx].d)
-      this.tIdx++
-    }
-    while (this.aIdx < this.appPoints.length && this.appPoints[this.aIdx].t <= clock) {
-      this.mergedApp = deepMergeF1(this.mergedApp, this.appPoints[this.aIdx].d)
-      this.aIdx++
-      this.appStateVersion++
-    }
-    this.cursorT = clock
-  }
-
-  private positionsAt(clock: number, timing: TimingEntry[]): PositionSample[] {
-    const entries = this.positionsPublished ? positionCoordinatesAt(this.positionPoints, clock) : {}
-    const iso = new Date(clock * 1000).toISOString()
-    return timing.map((e) => {
-      const p = entries[String(e.driverNumber)]
-      return {
-        driverNumber: e.driverNumber,
-        date: iso,
-        x: p?.x ?? null,
-        y: p?.y ?? null,
-        z: p?.z ?? null,
-        position: e.position,
-        lapProgress: null
-      }
-    })
-  }
-
-  private lapsUpTo(clock: number): LapSample[] {
-    const completedCounts: number[] = []
-    for (const recs of this.lapsByDriver.values()) {
-      let count = 0
-      while (count < recs.length && recs[count].tComplete <= clock) count++
-      completedCounts.push(count)
-    }
-    const cacheKey = completedCounts.join(',')
-    if (cacheKey === this.lapCacheKey) return this.lapCache
-
-    const out: LapSample[] = []
-    const pitLaps = this.pitLapIndex()
-    for (const recs of this.lapsByDriver.values()) {
-      for (const r of recs) {
-        if (r.tComplete <= clock) out.push(lapRecordToSample(r, pitLaps))
-      }
-    }
-    this.lapCacheKey = cacheKey
-    this.lapCache = out
-    return this.lapCache
-  }
-
-  private stintsAtCurrentState(): Stint[] {
-    if (this.stintCacheVersion !== this.appStateVersion) {
-      this.stintCacheVersion = this.appStateVersion
-      this.stintCache = buildStints(this.mergedApp, this.drivers)
-    }
-    return this.stintCache
-  }
-
-  private deriveTotalLaps(): number | null {
-    let total: number | null = null
-    for (const p of this.lapCountPoints) {
-      const t = lapCountAt(p).total
-      if (t != null) total = t
-    }
-    return total
+    this.playhead.resetCursor()
+    this.wholeSession.resetCursor()
+    this.checkpoints = []
   }
 
   /**
-   * Forward-scan newly appended TimingData into per-lap history (time + sectors
-   * + compound). The scan state lives in `lapBuild`, so archive ingest, the
-   * partial-timing tail and continuing live polls all process each point
-   * exactly once. Captures the build + lap map locally: a superseded load that
-   * is still mid-yield can only write into orphaned objects.
+   * A request at (or past) the end of the session is a whole-session read; it
+   * gets its own cursor so it never drags the playhead's.
    */
-  private async appendLapHistory(expectedLoadVersion = this.sessionLoadVersion): Promise<void> {
-    const build = this.lapBuild
-    const laps = this.lapsByDriver
-    const points = this.timingPoints
-    const appPoints = this.appPoints
-    let sinceYield = 0
-
-    while (build.processedTiming < points.length) {
-      const point = points[build.processedTiming]
-      // Keep tyre state in step by time for the compound stamp.
-      while (build.appIndex < appPoints.length && appPoints[build.appIndex].t <= point.t) {
-        build.app = deepMergeF1(build.app, appPoints[build.appIndex].d)
-        build.appIndex += 1
-      }
-      build.timing = deepMergeF1(build.timing, point.d)
-      const part = qualifyingPartAt(build.timing)
-      if (part != null && part !== build.previousPart) {
-        build.qualifyingParts.push({ t: point.t, part })
-        build.previousPart = part
-      }
-
-      const lines = rec(rec(build.timing).Lines)
-      if (!build.foundInitialTiming && Object.keys(lines).some((key) => /^\d+$/.test(key))) {
-        build.initialClock = point.t
-        build.foundInitialTiming = true
-      }
-      const appLines = rec(rec(build.app).Lines)
-      // A lap can only complete for a driver whose line is IN THIS PATCH —
-      // scanning every merged line for every point multiplies the dominant
-      // preprocessing cost by the field size for nothing. The values are still
-      // read from the MERGED line, since a patch may carry NumberOfLaps while
-      // the lap time/sectors arrived in earlier patches.
-      const patchLines = rec(rec(point.d).Lines)
-      for (const key of Object.keys(patchLines)) {
-        if (!/^\d+$/.test(key)) continue
-        const line = rec(lines[key])
-        const lapCount = num(line.NumberOfLaps)
-        if (lapCount == null) continue
-        const dn = +key
-        // Pit state seen since this driver's last completed lap. A lap during
-        // which the car was in the pit lane is its in-lap, and the lap after one
-        // is the out-lap. Used only as a fallback: PitLaneTimeCollection states
-        // the pit lap exactly, while InPit also goes true on the grid and under
-        // a red flag.
-        const pitState = build.pitState.get(dn) ?? { inPit: false, outNext: false }
-        if (line.InPit === true) pitState.inPit = true
-        if (line.PitOut === true) pitState.outNext = true
-        build.pitState.set(dn, pitState)
-
-        const prev = build.prevLaps.get(dn) ?? 0
-        if (lapCount > prev) {
-          build.prevLaps.set(dn, lapCount)
-          const last = rec(line.LastLapTime)
-          const sectors = indexedToArray(line.Sectors)
-          const arr = laps.get(dn) ?? []
-          arr.push({
-            driverNumber: dn,
-            lapNumber: lapCount,
-            lapTime: parseLapTime(last.Value),
-            sector1: parseLapTime(rec(sectors[0]).Value),
-            sector2: parseLapTime(rec(sectors[1]).Value),
-            sector3: parseLapTime(rec(sectors[2]).Value),
-            compound: currentStint(appLines[key]).compound,
-            tComplete: point.t,
-            isPitInLap: pitState.inPit,
-            isPitOutLap: pitState.outNext
-          })
-          laps.set(dn, arr)
-          // The lap after an in-lap is the out-lap; reset the in-pit watch.
-          build.pitState.set(dn, { inPit: false, outNext: pitState.inPit })
-        }
-      }
-      build.processedTiming += 1
-      if (++sinceYield >= PRECOMPUTE_YIELD_EVERY) {
-        sinceYield = 0
-        await yieldToRenderer()
-        if (expectedLoadVersion !== this.sessionLoadVersion) return
-      }
-    }
+  private viewFor(clock: number): ReplayView {
+    const duration = this.getDuration()
+    return duration > 0 && clock >= duration ? this.wholeSession : this.playhead
   }
 
-  // ── ERS estimate (2026 ~50%-electric power unit) ────────────────────────────
-  //
-  // The public F1 feed exposes throttle/brake/speed/aero but NOT battery state.
-  // We derive a labelled ESTIMATE via the shared, unit-tested `ErsEstimator`
-  // engine (harvest under braking, deploy under power, mean-reverting to a
-  // working window), computed once in a forward pass and decimated for lookup.
-  // energyIsEstimate is always set; values are absent entirely without CarData.
-
-  /**
-   * Integrate one chronological batch of CarData into the decimated ERS
-   * timeline. Called with the full array at ingest (live payloads) and with
-   * each streamed chunk during archive enrichment — same math either way.
-   */
-  private async integrateErsBatch(
-    points: F1StreamPoint[],
-    expectedLoadVersion: number
-  ): Promise<void> {
-    // Capture both so a superseded load can only ever write into orphans.
-    const build = this.ersBuild
-    const target = this.ersPoints
-
-    for (let pointIndex = 0; pointIndex < points.length; pointIndex++) {
-      const point = points[pointIndex]
-      for (const e of indexedToArray(rec(point.d).Entries)) {
-        const cars = rec(rec(e).Cars)
-        for (const [key, carRaw] of Object.entries(cars)) {
-          if (!/^\d+$/.test(key)) continue
-          const dn = +key
-          const ch = rec(rec(carRaw).Channels)
-          const sample: ErsTelemetrySample = {
-            throttle: num(ch[CAR_CHANNELS.throttle]),
-            speed: num(ch[CAR_CHANNELS.speed]),
-            brake: num(ch[CAR_CHANNELS.brake]),
-            aeroChannel: num(ch[CAR_CHANNELS.drs])
-          }
-          const dt = point.t - (build.lastT.get(dn) ?? point.t) // integrateErs clamps this
-          build.lastT.set(dn, point.t)
-          let state = build.states.get(dn) ?? initErsState()
-          // Crossing the line refills the lap's harvest/deployment allowances.
-          state = this.advanceErsLaps(build, dn, point.t, state)
-          build.states.set(dn, integrateErs(state, sample, dt))
-          build.lastSample.set(dn, sample)
-        }
-      }
-      // Emit a decimated snapshot of everyone's estimate (SoC + inferred mode).
-      const yieldDue = pointIndex > 0 && pointIndex % PRECOMPUTE_YIELD_EVERY === 0
-      if (point.t - build.lastEmit >= ERS_EMIT_DT) {
-        build.lastEmit = point.t
-        const byDriver: Record<number, ErsEstimate> = {}
-        for (const [dn, st] of build.states) {
-          byDriver[dn] = computeErsEstimate(st, build.lastSample.get(dn) ?? null)
-        }
-        target.push({ t: point.t, byDriver })
-      }
-      if (yieldDue) {
-        await yieldToRenderer()
-        if (expectedLoadVersion !== this.sessionLoadVersion) return
-      }
-    }
+  /** Move `view` to `clock` over the timing feeds (checkpoints: see `advanceView`). */
+  private advanceTo(view: ReplayView, clock: number): void {
+    advanceView(
+      view,
+      clock,
+      this.checkpoints,
+      { timingPoints: this.timingPoints, appPoints: this.appPoints },
+      { intervalSec: this.checkpointIntervalSec, max: this.maxCheckpoints }
+    )
   }
 
-  /**
-   * Refill the per-lap ERS allowances for every lap this driver completed at or
-   * before `t`.
-   *
-   * The lap boundary comes from the timing feed (`LapRecord.tComplete`), which
-   * is fully applied before CarData integrates — at ingest `appendLapHistory`
-   * runs first, and during archive enrichment the timing feed finishes before
-   * the `.z` telemetry streams. The cursor only moves forward, so a driver whose
-   * laps arrive later simply refills from wherever the cursor had reached.
-   */
-  private advanceErsLaps(
-    build: ErsBuild,
-    driverNumber: number,
-    t: number,
-    state: ErsDriverState
-  ): ErsDriverState {
-    const laps = this.lapsByDriver.get(driverNumber)
-    if (!laps || laps.length === 0) return state
-    let cursor = build.lapCursor.get(driverNumber) ?? 0
-    let next = state
-    while (cursor < laps.length && laps[cursor].tComplete <= t) {
-      next = startLap(next)
-      cursor++
-    }
-    build.lapCursor.set(driverNumber, cursor)
-    return next
+  private appendLapHistory(expectedLoadVersion = this.sessionLoadVersion): Promise<void> {
+    return appendLapHistory(
+      this.lapBuild,
+      this.lapsByDriver,
+      this.timingPoints,
+      this.appPoints,
+      () => expectedLoadVersion !== this.sessionLoadVersion
+    )
   }
 
-  /** Attach the ERS estimate to each timing entry at session time `clock`. */
-  private attachErs(timing: TimingEntry[], clock: number): void {
-    if (this.ersPoints.length === 0) return
-    const point = nearestAtOrBefore(this.ersPoints, clock, (p) => p.t)
-    if (!point) return
-    for (const e of timing) {
-      const est = point.byDriver[e.driverNumber]
-      if (!est || est.energyPct == null) continue
-      e.energyPct = est.energyPct
-      // Overtake Mode is distinct from Boost and is only available when the car
-      // is within one second at detection. Timing gives us an honest eligibility
-      // signal; the public feed does not expose the driver's button press.
-      e.deployMode = applyOvertakeEligibility(est.deployMode, e.intervalAhead)
-      e.energyIsEstimate = true
-      e.energyConfidence = est.confidence ?? undefined
-      e.energyDeployBudgetPct = est.deployBudgetRemainingPct
-      const trend = deriveEnergyTrend(this.ersPoints, e.driverNumber, clock)
-      e.energyTrend = trend.direction
-      e.energyTrendDeltaPct = trend.deltaPct
-      e.energyDeploymentLimited = est.deploymentLimited
-
-      const eligibility = explainOvertakeEligibility(
-        e.deployMode,
-        e.intervalAhead,
-        est.deployBudgetRemainingPct
-      )
-      if (eligibility.eligible) {
-        if (this.eligibleSinceClock.get(e.driverNumber) == null) {
-          this.eligibleSinceClock.set(e.driverNumber, clock)
-        }
-      } else {
-        this.eligibleSinceClock.delete(e.driverNumber)
-      }
-      e.energyEligibleForSec = eligibility.eligible
-        ? eligibilityDurationSec(this.eligibleSinceClock.get(e.driverNumber), clock)
-        : null
-      e.energyEligibilityReason = eligibility.reason
-    }
+  private integrateErsBatch(points: F1StreamPoint[], expectedLoadVersion: number): Promise<void> {
+    return integrateErsBatch(
+      points,
+      this.ersBuild,
+      this.ersPoints,
+      this.lapsByDriver,
+      () => expectedLoadVersion !== this.sessionLoadVersion
+    )
   }
-}
-
-/** Decimation spacing (s) for the ERS lookup timeline (~1.5s ≈ display cadence). */
-const ERS_EMIT_DT = 1.5
-
-// ── local helpers ────────────────────────────────────────────────────────────────
-
-interface ErsBuild {
-  states: Map<number, ErsDriverState>
-  lastSample: Map<number, ErsTelemetrySample>
-  lastT: Map<number, number>
-  lastEmit: number
-  /**
-   * Index of the next not-yet-crossed lap boundary in `lapsByDriver`, per driver.
-   * The ERS budgets refill once per lap, so the integrator needs to know when a
-   * car crossed the line. Kept as a forward-only cursor so a streaming CarData
-   * chunk costs O(new points), never O(laps × points).
-   */
-  lapCursor: Map<number, number>
-}
-
-function newErsBuild(): ErsBuild {
-  return {
-    states: new Map(),
-    lastSample: new Map(),
-    lastT: new Map(),
-    lastEmit: -Infinity,
-    lapCursor: new Map()
-  }
-}
-
-/** Rolling forward-scan state for the lap-history/qualifying extraction. */
-interface LapBuild {
-  timing: unknown
-  app: unknown
-  appIndex: number
-  processedTiming: number
-  prevLaps: Map<number, number>
-  pitState: Map<number, { inPit: boolean; outNext: boolean }>
-  qualifyingParts: { t: number; part: 1 | 2 | 3 }[]
-  previousPart: 1 | 2 | 3 | null
-  foundInitialTiming: boolean
-  initialClock: number
-}
-
-function newLapBuild(): LapBuild {
-  return {
-    timing: {},
-    app: {},
-    appIndex: 0,
-    processedTiming: 0,
-    prevLaps: new Map(),
-    pitState: new Map(),
-    qualifyingParts: [],
-    previousPart: null,
-    foundInitialTiming: false,
-    initialClock: 0
-  }
-}
-
-interface DriverBuild {
-  state: unknown
-  processed: number
-}
-
-function newDriverBuild(): DriverBuild {
-  return { state: {}, processed: 0 }
-}
-
-function rec(v: unknown): Record<string, unknown> {
-  return v && typeof v === 'object' ? (v as Record<string, unknown>) : {}
-}
-function num(v: unknown): number | null {
-  if (typeof v === 'number') return isFinite(v) ? v : null
-  if (typeof v === 'string' && v.trim()) {
-    const n = parseFloat(v)
-    return isFinite(n) ? n : null
-  }
-  return null
-}
-
-function hasUsableCarData(points: F1StreamPoint[]): boolean {
-  for (const point of points) {
-    for (const entry of indexedToArray(rec(point.d).Entries)) {
-      if (Object.keys(rec(rec(entry).Cars)).some((key) => /^\d+$/.test(key))) return true
-    }
-  }
-  return false
-}
-function mapType(type: string): SessionInfo['type'] {
-  const s = type.toLowerCase()
-  if (s.includes('sprint') && s.includes('qual')) return 'sprint-qualifying'
-  if (s.includes('sprint')) return 'sprint'
-  if (s.includes('qual')) return 'qualifying'
-  if (s.includes('practice')) return 'practice'
-  if (s.includes('race')) return 'race'
-  return 'unknown'
 }

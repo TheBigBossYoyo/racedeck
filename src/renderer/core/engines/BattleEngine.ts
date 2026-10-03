@@ -1,5 +1,5 @@
 import type { TimingEntry, TyreCompound } from '@shared/models'
-import type { RaceSnapshot } from '@renderer/core/providers/types'
+import type { RaceSnapshot } from '@renderer/core/model/snapshot'
 import { driverRecentPace } from './AnalyticsEngine'
 
 /**

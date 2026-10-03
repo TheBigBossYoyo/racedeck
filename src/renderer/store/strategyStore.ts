@@ -13,7 +13,7 @@ import {
   WinProbabilityEngine,
   winProbabilitySummary
 } from '@renderer/core/engines/WinProbabilityEngine'
-import type { RaceSnapshot } from '@renderer/core/providers/types'
+import type { RaceSnapshot } from '@renderer/core/model/snapshot'
 import {
   buildRaceContext,
   buildBriefingMessages,

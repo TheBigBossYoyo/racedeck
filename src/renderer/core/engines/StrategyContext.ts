@@ -1,4 +1,4 @@
-import type { RaceSnapshot } from '@renderer/core/providers/types'
+import type { RaceSnapshot } from '@renderer/core/model/snapshot'
 import type { AiMessage } from '@shared/ai'
 import type { PitPrediction } from './StrategyEngine'
 

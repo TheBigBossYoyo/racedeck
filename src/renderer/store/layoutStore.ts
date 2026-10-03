@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { STORE_NS } from '@shared/ipc-contract'
 import { persist } from './persist'
+import { createCoalescedWriter, describeError, writeLogged } from './persistWrite'
 import {
   LAYOUT_PRESETS,
   cloneGrid,
@@ -41,6 +42,19 @@ interface LayoutStoreState {
 const K = { saved: 'saved', last: 'last', working: (id: string) => `working:${id}` }
 let layoutReadVersion = 0
 
+/**
+ * A drag/resize emits a grid change per frame; only the settled layout is worth
+ * a disk write. Every other layout action flushes first so writes to a key stay
+ * in the order they were made.
+ */
+const GRID_WRITE_DELAY_MS = 400
+const gridWriter = createCoalescedWriter(GRID_WRITE_DELAY_MS)
+
+/** `in` would also accept inherited names such as "constructor". */
+function isPresetId(value: unknown): value is LayoutId {
+  return typeof value === 'string' && Object.prototype.hasOwnProperty.call(LAYOUT_PRESETS, value)
+}
+
 export const useLayoutStore = create<LayoutStoreState>((set, get) => ({
   currentLayoutId: 'broadcast-data',
   activeSavedId: null,
@@ -50,15 +64,16 @@ export const useLayoutStore = create<LayoutStoreState>((set, get) => ({
   hydrated: false,
 
   hydrate: async () => {
+    gridWriter.flush()
     const readVersion = ++layoutReadVersion
     const [rawSaved, last] = await Promise.all([
       persist.get<unknown[]>(STORE_NS.LAYOUTS, K.saved),
-      persist.get<LayoutId>(STORE_NS.LAYOUTS, K.last)
+      persist.get<unknown>(STORE_NS.LAYOUTS, K.last)
     ])
     const savedLayouts = Array.isArray(rawSaved)
       ? rawSaved.map(deserializeSavedLayout).filter((l): l is SavedLayout => l !== null)
       : []
-    const layoutId: LayoutId = last && last in LAYOUT_PRESETS ? last : 'broadcast-data'
+    const layoutId: LayoutId = isPresetId(last) ? last : 'broadcast-data'
     const working = await persist.get<unknown>(STORE_NS.LAYOUTS, K.working(layoutId))
     if (readVersion !== layoutReadVersion) return
     const workingGrid = sanitizeGrid(working)
@@ -71,14 +86,22 @@ export const useLayoutStore = create<LayoutStoreState>((set, get) => ({
   },
 
   setLayout: (id) => {
+    gridWriter.flush()
     const readVersion = ++layoutReadVersion
     set({ currentLayoutId: id, activeSavedId: null })
-    void persist.get<unknown>(STORE_NS.LAYOUTS, K.working(id)).then((working) => {
-      if (readVersion !== layoutReadVersion || get().currentLayoutId !== id) return
-      const workingGrid = sanitizeGrid(working)
-      set({ grid: workingGrid.length ? workingGrid : cloneGrid(LAYOUT_PRESETS[id].grid) })
-    })
-    void persist.set(STORE_NS.LAYOUTS, K.last, id)
+    persist
+      .get<unknown>(STORE_NS.LAYOUTS, K.working(id))
+      .then((working) => {
+        if (readVersion !== layoutReadVersion || get().currentLayoutId !== id) return
+        const workingGrid = sanitizeGrid(working)
+        set({ grid: workingGrid.length ? workingGrid : cloneGrid(LAYOUT_PRESETS[id].grid) })
+      })
+      .catch((error: unknown) => {
+        console.error(
+          `[persist] Could not read the saved grid for layout "${id}", keeping the current one — ${describeError(error)}`
+        )
+      })
+    writeLogged(STORE_NS.LAYOUTS, K.last, id)
   },
 
   updateGrid: (grid) => {
@@ -86,18 +109,20 @@ export const useLayoutStore = create<LayoutStoreState>((set, get) => ({
     const sane = sanitizeGrid(grid)
     if (sane.length === 0) return
     set({ grid: sane })
-    void persist.set(STORE_NS.LAYOUTS, K.working(get().currentLayoutId), sane)
+    gridWriter.schedule(STORE_NS.LAYOUTS, K.working(get().currentLayoutId), sane)
   },
 
   resetLayout: () => {
+    gridWriter.flush()
     layoutReadVersion++
     const id = get().currentLayoutId
     const grid = cloneGrid(LAYOUT_PRESETS[id].grid)
     set({ grid, activeSavedId: null })
-    void persist.set(STORE_NS.LAYOUTS, K.working(id), grid)
+    writeLogged(STORE_NS.LAYOUTS, K.working(id), grid)
   },
 
   saveCurrentAs: async (name) => {
+    gridWriter.flush()
     layoutReadVersion++
     const layout = createSavedLayout(get().currentLayoutId, name, get().grid)
     const savedLayouts = [...get().savedLayouts, layout]
@@ -109,14 +134,15 @@ export const useLayoutStore = create<LayoutStoreState>((set, get) => ({
   loadSaved: (id) => {
     const layout = get().savedLayouts.find((l) => l.id === id)
     if (!layout) return
+    gridWriter.flush()
     layoutReadVersion++
     set({
       currentLayoutId: layout.base,
       activeSavedId: id,
       grid: cloneGrid(layout.grid)
     })
-    void persist.set(STORE_NS.LAYOUTS, K.last, layout.base)
-    void persist.set(STORE_NS.LAYOUTS, K.working(layout.base), cloneGrid(layout.grid))
+    writeLogged(STORE_NS.LAYOUTS, K.last, layout.base)
+    writeLogged(STORE_NS.LAYOUTS, K.working(layout.base), cloneGrid(layout.grid))
   },
 
   deleteSaved: async (id) => {

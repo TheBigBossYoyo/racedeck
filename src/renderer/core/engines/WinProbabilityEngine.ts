@@ -1,6 +1,6 @@
 import type { TimingEntry } from '@shared/models'
-import type { RaceSnapshot } from '@renderer/core/providers/types'
-import { driverRecentPace } from './AnalyticsEngine'
+import type { RaceSnapshot } from '@renderer/core/model/snapshot'
+import { driverLaps, driverRecentPace } from './AnalyticsEngine'
 import { circuitPitLoss } from './StrategyEngine'
 import { buildPitCycleField, classifyCloseTraffic } from './PitCycleModel'
 
@@ -12,7 +12,8 @@ import { buildPitCycleField, classifyCloseTraffic } from './PitCycleModel'
  * Everything here is an ESTIMATE derived only from real, available data — track
  * position, gaps, laps remaining, recent pace, tyre state and neutralisations.
  * It is never presented as fact, and it degrades gracefully (a quali/practice
- * session or a snapshot without gaps simply yields no projection).
+ * session, a snapshot without gaps, or an unknown race distance simply yields
+ * no projection; the distance is never assumed).
  *
  * Method (pure + unit-tested):
  *  1. Each running driver gets a projected FINAL margin to the leader (seconds):
@@ -110,8 +111,8 @@ export interface WinProbabilityModel {
   /** Fraction of the race completed (0..1), when derivable. */
   raceProgress: number | null
   neutralized: boolean
-  /** Uncertainty scale used (s) — surfaced for transparency. */
-  beta: number
+  /** Uncertainty scale used (s) — surfaced for transparency. Null when the race distance is unknown. */
+  beta: number | null
   confidencePct: number
   dataQuality: WinProbabilityDataQuality
   chances: WinChance[]
@@ -173,13 +174,8 @@ function recentPaceFor(snapshot: RaceSnapshot, entry: TimingEntry): number | nul
 
 function paceSampleCount(snapshot: RaceSnapshot, entry: TimingEntry): number {
   return clamp(
-    snapshot.laps.filter(
-      (lap) =>
-        lap.driverNumber === entry.driverNumber &&
-        lap.lapTime != null &&
-        lap.lapTime > 0 &&
-        !lap.isPitInLap &&
-        !lap.isPitOutLap
+    driverLaps(snapshot, entry.driverNumber).filter(
+      (lap) => lap.lapTime != null && lap.lapTime > 0 && !lap.isPitInLap && !lap.isPitOutLap
     ).length,
     0,
     8
@@ -398,12 +394,15 @@ export function poissonBinomialPmf(probs: number[]): number[] {
 }
 
 export const WinProbabilityEngine = {
-  betaFor(snapshot: RaceSnapshot, lapsRemaining: number | null): number {
-    const raceProgress =
-      snapshot.totalLaps != null && snapshot.currentLap != null && snapshot.totalLaps > 0
-        ? clamp(snapshot.currentLap / snapshot.totalLaps, 0, 1)
-        : 0.5
-    let beta = BASE_BETA + BETA_PER_LAP * Math.max(0, lapsRemaining ?? 12)
+  /**
+   * Finishing-time noise (s). Null when the race distance is unknown: the noise
+   * scales with the laps left, so there is nothing honest to scale.
+   */
+  betaFor(snapshot: RaceSnapshot, lapsRemaining: number | null): number | null {
+    const { totalLaps, currentLap } = snapshot
+    if (lapsRemaining == null || totalLaps == null || totalLaps <= 0 || currentLap == null) return null
+    const raceProgress = clamp(currentLap / totalLaps, 0, 1)
+    let beta = BASE_BETA + BETA_PER_LAP * Math.max(0, lapsRemaining)
     beta *= 1.2 - 0.2 * raceProgress
     beta = Math.min(MAX_GREEN_BETA, beta)
     if (snapshot.trackStatus === 'SAFETY_CAR' || snapshot.trackStatus === 'VSC')
@@ -415,14 +414,14 @@ export const WinProbabilityEngine = {
   /** Full win/podium/points model for the current snapshot. */
   compute(snapshot: RaceSnapshot): WinProbabilityModel {
     const neutralized = snapshot.trackStatus === 'SAFETY_CAR' || snapshot.trackStatus === 'VSC'
-    const lapsRemaining =
-      snapshot.totalLaps != null && snapshot.currentLap != null
-        ? Math.max(0, snapshot.totalLaps - snapshot.currentLap)
-        : null
-    const raceProgress =
-      snapshot.totalLaps != null && snapshot.currentLap != null && snapshot.totalLaps > 0
-        ? Math.min(1, snapshot.currentLap / snapshot.totalLaps)
-        : null
+    const distanceKnown =
+      snapshot.totalLaps != null && snapshot.totalLaps > 0 && snapshot.currentLap != null
+    const lapsRemaining = distanceKnown
+      ? Math.max(0, (snapshot.totalLaps as number) - (snapshot.currentLap as number))
+      : null
+    const raceProgress = distanceKnown
+      ? Math.min(1, (snapshot.currentLap as number) / (snapshot.totalLaps as number))
+      : null
     const beta = this.betaFor(snapshot, lapsRemaining)
 
     const base: WinProbabilityModel = {
@@ -445,11 +444,22 @@ export const WinProbabilityEngine = {
     const pointsTable = isSprint ? POINTS_SPRINT : POINTS_RACE
     const pointsPlaces = pointsTable.length
 
-    const effLapsRemaining = lapsRemaining ?? 12
-    const survival = survivalProbability(effLapsRemaining)
-    const progress = clamp(raceProgress ?? 0.45, 0.02, 1)
-    const projectionLaps = effLapsRemaining * (0.25 + 0.75 * progress)
-    const tyreProjectionLaps = Math.min(effLapsRemaining, 4 + 8 * progress)
+    // Survival, noise and the projection horizon all scale with the laps left, so
+    // with no known race distance there is nothing to project from.
+    if (lapsRemaining == null || raceProgress == null || beta == null) {
+      const totalKnown = snapshot.totalLaps != null && snapshot.totalLaps > 0
+      return {
+        ...base,
+        reason: totalKnown
+          ? 'Current lap not reported yet, so the win projection is withheld.'
+          : 'Race distance unknown, so the win projection is withheld.'
+      }
+    }
+
+    const survival = survivalProbability(lapsRemaining)
+    const progress = clamp(raceProgress, 0.02, 1)
+    const projectionLaps = lapsRemaining * (0.25 + 0.75 * progress)
+    const tyreProjectionLaps = Math.min(lapsRemaining, 4 + 8 * progress)
 
     interface Cand {
       entry: TimingEntry

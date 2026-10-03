@@ -6,7 +6,8 @@ import type { FlagType, TyreCompound, RaceControlMessage } from '@shared/models'
  */
 
 export function normalizeCompound(raw: string | null | undefined): TyreCompound {
-  if (!raw) return 'UNKNOWN'
+  // Feed values are cast, not checked, so a non-string can arrive at runtime.
+  if (typeof raw !== 'string' || !raw) return 'UNKNOWN'
   const s = raw.trim().toUpperCase()
   switch (s) {
     case 'SOFT':
@@ -100,30 +101,8 @@ export function normalizeGap(
   return isFinite(parsed) ? parsed : null
 }
 
-/**
- * Binary-search the last element with `date` (ms) at or before `wallMs`.
- * `items` MUST be sorted ascending by the numeric ms accessor.
- */
-export function nearestAtOrBefore<T>(
-  items: T[],
-  wallMs: number,
-  ms: (item: T) => number
-): T | null {
-  if (items.length === 0) return null
-  let lo = 0
-  let hi = items.length - 1
-  let result: T | null = null
-  while (lo <= hi) {
-    const mid = (lo + hi) >> 1
-    if (ms(items[mid]) <= wallMs) {
-      result = items[mid]
-      lo = mid + 1
-    } else {
-      hi = mid - 1
-    }
-  }
-  return result
-}
+// Lives in the neutral `core/normalize/` layer (engines use it too); re-exported here.
+export { nearestAtOrBefore } from '@renderer/core/normalize/series'
 
 /** Milliseconds since epoch from an ISO string; NaN-safe (returns 0). */
 export function toMs(iso: string | null | undefined): number {

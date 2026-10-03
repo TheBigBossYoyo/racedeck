@@ -1,4 +1,4 @@
-import type { RaceSnapshot } from '@renderer/core/providers/types'
+import type { RaceSnapshot } from '@renderer/core/model/snapshot'
 import type { RaceBookmark } from '@renderer/core/engines/RaceBookmarks'
 import type { UserAnnotation } from '@renderer/core/engines/UserAnnotations'
 import { buildPitStopHistory, type PitStopRecord } from '@renderer/core/engines/PitHistory'

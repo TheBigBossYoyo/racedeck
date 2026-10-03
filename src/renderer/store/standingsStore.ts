@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import type { SeasonChampionship } from '@shared/standings'
 import { hasBridge, bridge } from '@renderer/lib/ipc'
+import { errorMessage } from '@renderer/lib/errorMessage'
 
 /**
  * standingsStore — holds the championship baseline (pre-round standings) for the
@@ -52,7 +53,7 @@ export const useStandingsStore = create<StandingsStoreState>((set, get) => ({
       })
     } catch (e) {
       if (version !== requestVersion) return
-      set({ championship: null, error: (e as Error).message, loading: false })
+      set({ championship: null, error: errorMessage(e), loading: false })
     }
   },
 

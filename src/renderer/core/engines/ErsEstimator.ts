@@ -58,7 +58,7 @@
  */
 
 import type { EnergyMode } from '@shared/models'
-import { nearestAtOrBefore } from '@renderer/core/providers/normalize'
+import { nearestAtOrBefore } from '@renderer/core/normalize/series'
 
 // ── Public types ──────────────────────────────────────────────────────────────
 

@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import { STORE_NS } from '@shared/ipc-contract'
 import type { RaceControlMessage, SyncState, VideoPlaybackProbe } from '@shared/models'
 import { persist } from './persist'
+import { createCoalescedWriter, writeLogged } from './persistWrite'
 import { bridge, hasBridge } from '@renderer/lib/ipc'
 import {
   SessionSyncEngine,
@@ -18,6 +19,21 @@ import {
 
 const engine = new SessionSyncEngine()
 let syncReadVersion = 0
+
+/**
+ * The offset slider moves the live offset on every pointer move; only the value
+ * it settles on is worth writing. The in-memory offset is never delayed.
+ */
+const OFFSET_WRITE_DELAY_MS = 400
+const offsetWriter = createCoalescedWriter(OFFSET_WRITE_DELAY_MS)
+
+function persistOffset(sync: SyncState): void {
+  offsetWriter.schedule(
+    STORE_NS.SYNC,
+    syncOffsetKey(sync.broadcaster, sync.scopeKey),
+    sync.offsetSeconds
+  )
+}
 
 /**
  * How often the TOD player's clock is read while follow is on.
@@ -173,6 +189,7 @@ export const useSyncStore = create<SyncStoreState>((set, get) => ({
   lastProbeAtMs: null,
 
   hydrate: async () => {
+    offsetWriter.flush()
     const readVersion = ++syncReadVersion
     const b = engine.getState().broadcaster
     const saved = await persist.get<number>(STORE_NS.SYNC, syncOffsetKey(b, null))
@@ -188,11 +205,7 @@ export const useSyncStore = create<SyncStoreState>((set, get) => ({
     syncReadVersion++
     const sync = engine.setOffset(seconds)
     set({ sync })
-    void persist.set(
-      STORE_NS.SYNC,
-      syncOffsetKey(sync.broadcaster, sync.scopeKey),
-      sync.offsetSeconds
-    )
+    persistOffset(sync)
     void reanchorIfFollowing(sync.offsetSeconds)
   },
 
@@ -200,15 +213,12 @@ export const useSyncStore = create<SyncStoreState>((set, get) => ({
     syncReadVersion++
     const sync = engine.nudge(delta)
     set({ sync })
-    void persist.set(
-      STORE_NS.SYNC,
-      syncOffsetKey(sync.broadcaster, sync.scopeKey),
-      sync.offsetSeconds
-    )
+    persistOffset(sync)
     void reanchorIfFollowing(sync.offsetSeconds)
   },
 
   setBroadcaster: async (b) => {
+    offsetWriter.flush()
     const readVersion = ++syncReadVersion
     invalidateFollowLifecycle()
     clearFollowContext()
@@ -231,6 +241,7 @@ export const useSyncStore = create<SyncStoreState>((set, get) => ({
   },
 
   setScope: async (scopeKey) => {
+    offsetWriter.flush()
     const readVersion = ++syncReadVersion
     invalidateFollowLifecycle()
     clearFollowContext()
@@ -288,7 +299,7 @@ export const useSyncStore = create<SyncStoreState>((set, get) => ({
   },
 
   setFollowEnabled: async (enabled) => {
-    void persist.set(STORE_NS.SYNC, FOLLOW_ENABLED_KEY, enabled)
+    writeLogged(STORE_NS.SYNC, FOLLOW_ENABLED_KEY, enabled)
     invalidateFollowLifecycle()
     if (!enabled) {
       set({ anchor: null, follow: { ...OFF_FOLLOW_STATE } })
@@ -313,11 +324,7 @@ export const useSyncStore = create<SyncStoreState>((set, get) => ({
     syncReadVersion++
     const sync = engine.setOffset(offsetSeconds)
     set(eventLabel != null ? { sync, lastMatchedEvent: eventLabel } : { sync })
-    void persist.set(
-      STORE_NS.SYNC,
-      syncOffsetKey(sync.broadcaster, sync.scopeKey),
-      sync.offsetSeconds
-    )
+    persistOffset(sync)
     if (!get().follow.enabled) return
     await restartFollowFromCurrentOffset(sync.offsetSeconds)
   }

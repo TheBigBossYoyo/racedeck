@@ -13,7 +13,7 @@
  */
 
 import type { LapSample, TimingEntry, TyreCompound, TyreStintRecord } from '@shared/models'
-import type { RaceSnapshot } from '@renderer/core/providers/types'
+import type { RaceSnapshot } from '@renderer/core/model/snapshot'
 import { StrategyEngine, fuelCorrectedLapTimes } from '@renderer/core/engines/StrategyEngine'
 import {
   classifyTrackContamination,
@@ -21,7 +21,7 @@ import {
 } from '@renderer/core/engines/PitCycleModel'
 import { compoundModel } from '@renderer/core/engines/AnalyticsEngine'
 import { estimateFuelCoefficient } from '@renderer/core/engines/FuelModel'
-import { reconcileTyreHistory } from '@renderer/core/providers/f1normalize'
+import { reconcileTyreHistory } from '@renderer/core/normalize/tyreReconcile'
 
 /** Degradation bands (s/lap) used for the headline verdict. */
 const DEG_STEADY_MAX = 0.06

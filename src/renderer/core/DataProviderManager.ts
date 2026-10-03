@@ -2,13 +2,14 @@ import type { SessionInfo } from '@shared/models'
 import type {
   DataProvider,
   ProviderCapabilities,
-  ProviderDiagnostics,
-  RaceSnapshot,
-  SessionTimeline
+  ProviderDiagnostics
 } from './providers/types'
+import type { RaceSnapshot } from '@renderer/core/model/snapshot'
+import type { SessionTimeline } from '@renderer/core/model/timeline'
 import { DemoProvider } from './providers/DemoProvider'
 import { OpenF1Provider } from './providers/OpenF1Provider'
 import { F1LiveProvider } from './providers/F1LiveProvider'
+import { persistTrackPathStorage } from './providers/f1/persistTrackPathStorage'
 
 /**
  * DataProviderManager — the registry + active-provider switch.
@@ -25,7 +26,8 @@ export class DataProviderManager {
 
   constructor() {
     const demo = new DemoProvider()
-    const f1live = new F1LiveProvider()
+    // Persistence is injected here so the provider itself depends only on an interface.
+    const f1live = new F1LiveProvider({ trackPathStorage: persistTrackPathStorage })
     const openf1 = new OpenF1Provider()
     this.register(demo)
     this.register(f1live) // real F1 official data (featured real-data source)
