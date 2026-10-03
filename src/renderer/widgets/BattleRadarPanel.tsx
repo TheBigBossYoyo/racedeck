@@ -1,7 +1,7 @@
 import { useMemo } from 'react'
 import { Swords, Zap, TrendingUp, Users, Flame } from 'lucide-react'
 import { WidgetFrame } from '@renderer/components/ui/WidgetFrame'
-import { Badge, TyrePill, EmptyState } from '@renderer/components/ui/primitives'
+import { Badge, TyrePill, EmptyState, FOCUS_RING } from '@renderer/components/ui/primitives'
 import { useSessionStore } from '@renderer/store/sessionStore'
 import { useSettingsStore } from '@renderer/store/settingsStore'
 import { computeBattles, type Battle, type BattleVerdict } from '@renderer/core/engines/BattleEngine'
@@ -100,8 +100,10 @@ function BattleRow({
   return (
     <button
       onClick={onPick}
+      aria-pressed={isFocus}
       className={cn(
         'group w-full rounded-lg border px-2 py-1.5 text-left transition-colors',
+        FOCUS_RING,
         isFocus ? 'border-accent/40 bg-accent/5' : 'border-transparent hover:border-hairline/30 hover:bg-white/[0.03]'
       )}
     >
@@ -152,7 +154,11 @@ function BattleRow({
           </span>
         )}
         {/* intensity bar */}
-        <span className="ml-auto flex items-center gap-1 text-fg-subtle">
+        <span
+          role="img"
+          aria-label={`Battle intensity: ${b.intensity > 0.6 ? 'high' : b.intensity > 0.3 ? 'medium' : 'low'}`}
+          className="ml-auto flex items-center gap-1 text-fg-subtle"
+        >
           <Flame className={cn('h-2.5 w-2.5', b.intensity > 0.6 ? 'text-danger' : b.intensity > 0.3 ? 'text-warn' : 'text-fg-subtle')} />
           <span className="h-1 w-10 overflow-hidden rounded-full bg-white/[0.06]">
             <span

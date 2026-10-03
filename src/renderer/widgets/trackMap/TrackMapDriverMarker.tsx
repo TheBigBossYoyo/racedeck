@@ -33,6 +33,50 @@ const dotAnimations = new AnimationFrameBatch<number, ActiveDotAnimation>((anima
   return progress < 1
 })
 
+function sameLabelPlacement(a?: TrackMapLabelPlacement, b?: TrackMapLabelPlacement): boolean {
+  if (a === b) return true
+  if (a == null || b == null) return false
+  return (
+    a.text === b.text &&
+    a.x === b.x &&
+    a.y === b.y &&
+    a.textAnchor === b.textAnchor &&
+    a.visible === b.visible
+  )
+}
+
+/**
+ * The parent rebuilds every `dot` and label placement on each snapshot, so
+ * reference equality never holds. Compare exactly the fields the marker renders
+ * from, so an unmoved car with an unchanged label skips its render entirely.
+ */
+export function trackMapMarkerPropsEqual(
+  prev: TrackMapDriverMarkerProps,
+  next: TrackMapDriverMarkerProps
+): boolean {
+  const a = prev.dot
+  const b = next.dot
+  return (
+    (a === b ||
+      (a.number === b.number &&
+        a.x === b.x &&
+        a.y === b.y &&
+        a.code === b.code &&
+        a.color === b.color &&
+        a.position === b.position &&
+        a.isRetired === b.isRetired &&
+        a.isInPit === b.isInPit &&
+        a.isFastestLap === b.isFastestLap &&
+        a.extrapolated === b.extrapolated)) &&
+    prev.focused === next.focused &&
+    prev.favorite === next.favorite &&
+    prev.animate === next.animate &&
+    prev.durationMs === next.durationMs &&
+    prev.onFocus === next.onFocus &&
+    sameLabelPlacement(prev.labelPlacement, next.labelPlacement)
+  )
+}
+
 export const TrackMapDriverMarker = memo(function TrackMapDriverMarker({
   dot,
   focused,
@@ -97,7 +141,8 @@ export const TrackMapDriverMarker = memo(function TrackMapDriverMarker({
       }}
       role="button"
       tabIndex={0}
-      aria-label={`${dot.code}, position ${dot.position ?? 'unknown'}${dot.isFastestLap ? ', fastest lap' : ''}${dot.extrapolated ? ', estimated position — feed stalled' : ''}`}
+      aria-pressed={focused}
+      aria-label={trackMapMarkerLabel(dot, favorite)}
       className="group cursor-pointer outline-none"
       style={{
         willChange: animate ? 'transform' : undefined
@@ -167,7 +212,23 @@ export const TrackMapDriverMarker = memo(function TrackMapDriverMarker({
       )}
     </g>
   )
-})
+}, trackMapMarkerPropsEqual)
+
+/**
+ * Screen-reader name for a marker. Every state the dot shows only by fade, ring
+ * or dash (pit, retired, favourite, fastest lap, stalled feed) is spelled out.
+ */
+export function trackMapMarkerLabel(dot: DriverDot, favorite: boolean): string {
+  return [
+    `${dot.code}, position ${dot.position ?? 'unknown'}`,
+    dot.isFastestLap ? 'fastest lap' : null,
+    favorite ? 'favourite' : null,
+    dot.isRetired ? 'retired' : dot.isInPit ? 'in the pits' : null,
+    dot.extrapolated ? 'estimated position — feed stalled' : null
+  ]
+    .filter((part): part is string => part != null)
+    .join(', ')
+}
 
 export function getTrackMapMarkerRadius(focused: boolean): number {
   return focused ? 7 : 5.5

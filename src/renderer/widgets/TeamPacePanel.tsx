@@ -1,7 +1,7 @@
 import { useMemo } from 'react'
 import { Users } from 'lucide-react'
 import { WidgetFrame } from '@renderer/components/ui/WidgetFrame'
-import { EmptyState, Badge } from '@renderer/components/ui/primitives'
+import { EmptyState, Badge, FOCUS_RING } from '@renderer/components/ui/primitives'
 import { useSessionStore } from '@renderer/store/sessionStore'
 import { teamPace } from '@renderer/core/engines/AnalyticsEngine'
 import { formatLapTime, hexColor, cn } from '@renderer/lib/utils'
@@ -62,7 +62,10 @@ export function TeamPacePanel() {
                   <button
                     key={d.number}
                     onClick={() => setFocus(d.number)}
-                    className="flex items-center gap-1 text-2xs text-fg-muted transition-colors hover:text-fg"
+                    className={cn(
+                      'flex items-center gap-1 rounded text-2xs text-fg-muted transition-colors hover:text-fg',
+                      FOCUS_RING
+                    )}
                   >
                     <span className="font-bold">{d.code}</span>
                     <span className="tnum text-fg-subtle">{formatLapTime(d.pace)}</span>

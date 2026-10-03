@@ -41,7 +41,10 @@ export function DialogContent({
                 </DialogPrimitive.Description>
               )}
             </div>
-            <DialogClose className="rounded-lg p-1 text-fg-subtle transition-colors hover:bg-white/5 hover:text-fg">
+            <DialogClose
+              aria-label="Close"
+              className="rounded-lg p-1 text-fg-subtle transition-colors hover:bg-white/5 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
+            >
               <X className="h-4 w-4" />
             </DialogClose>
           </div>

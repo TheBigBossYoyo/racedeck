@@ -10,7 +10,7 @@ import {
 } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { WidgetFrame } from '@renderer/components/ui/WidgetFrame'
-import { Badge, EmptyState } from '@renderer/components/ui/primitives'
+import { Badge, EmptyState, FOCUS_RING_INSET } from '@renderer/components/ui/primitives'
 import { useSessionStore } from '@renderer/store/sessionStore'
 import { useRaceStoryStore } from '@renderer/store/raceStoryStore'
 import type { StoryEvent, StoryKind, StorySeverity } from '@renderer/core/engines/RaceStoryEngine'
@@ -82,6 +82,7 @@ function StoryRow({ e }: { e: StoryEvent }) {
         disabled={!clickable}
         className={cn(
           'flex w-full items-start gap-2 rounded-lg px-2 py-1.5 text-left transition-colors',
+          FOCUS_RING_INSET,
           clickable ? 'hover:bg-white/[0.03]' : 'cursor-default'
         )}
       >

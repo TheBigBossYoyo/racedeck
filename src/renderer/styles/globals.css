@@ -129,6 +129,12 @@ body {
     0 12px 40px -12px rgb(0 0 0 / 0.65);
 }
 
+/* Performance mode: same tint, border and shadow, minus the GPU-costly backdrop blur. */
+.glass.glass-flat {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
 .glass-strong {
   background: linear-gradient(180deg, rgb(var(--bg-overlay) / 0.9), rgb(var(--panel) / 0.82));
   backdrop-filter: blur(28px) saturate(1.25);
@@ -247,4 +253,18 @@ body {
     rgb(var(--accent) / 0.7),
     transparent
   );
+}
+
+@layer base {
+  /*
+   * Keyboard-only focus ring for controls that do not draw their own. It sits in the base
+   * layer (an unlayered rule would beat every utility, doubling the outline on inputs that
+   * already set `outline-none` + their own ring) and `:where()` keeps specificity at zero, so
+   * any component ring or `outline-none` utility wins; `tabindex="-1"` is skipped because it
+   * is focused from code, not by tabbing.
+   */
+  :where(button, [role='button'], a[href], input, select, textarea, [tabindex]:not([tabindex='-1'])):focus-visible {
+    outline: 2px solid rgb(var(--accent) / 0.6);
+    outline-offset: 2px;
+  }
 }

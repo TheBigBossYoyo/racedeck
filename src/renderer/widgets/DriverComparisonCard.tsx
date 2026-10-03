@@ -14,17 +14,21 @@ export function DriverSelect({
   drivers,
   value,
   onChange,
-  color
+  color,
+  label = 'Driver'
 }: {
   drivers: Driver[]
   value: number
   onChange: (n: number) => void
   color: string
+  /** Accessible name; the dot beside the select carries no text. */
+  label?: string
 }) {
   return (
     <div className="flex items-center gap-1.5">
       <span className="h-3 w-3 rounded-full" style={{ backgroundColor: color }} />
       <select
+        aria-label={label}
         value={value}
         onChange={(e) => onChange(Number(e.target.value))}
         className="no-drag cursor-pointer rounded-md border border-hairline/30 bg-black/30 px-1.5 py-1 text-sm font-bold text-fg outline-none focus:border-accent/50"
@@ -61,6 +65,7 @@ function Row({
         )}
       >
         {a}
+        {betterA && <span className="sr-only"> (better)</span>}
       </span>
       <span className="text-[9px] uppercase tracking-wider text-fg-subtle">{label}</span>
       <span
@@ -70,6 +75,7 @@ function Row({
         )}
       >
         {b}
+        {betterB && <span className="sr-only"> (better)</span>}
       </span>
     </div>
   )
@@ -206,9 +212,9 @@ export function DriverComparisonCard() {
   return (
     <WidgetFrame title="Driver Comparison" icon={<Users />}>
       <div className="flex items-center justify-between px-1 pb-2">
-        <DriverSelect drivers={drivers} value={aNum} onChange={setANum} color={colorA} />
+        <DriverSelect drivers={drivers} value={aNum} onChange={setANum} color={colorA} label="First driver" />
         <span className="text-2xs font-semibold uppercase tracking-widest text-fg-subtle">vs</span>
-        <DriverSelect drivers={drivers} value={bNum} onChange={setBNum} color={colorB} />
+        <DriverSelect drivers={drivers} value={bNum} onChange={setBNum} color={colorB} label="Second driver" />
       </div>
 
       {headToHead != null && (

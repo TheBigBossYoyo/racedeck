@@ -69,6 +69,7 @@ export function AnnotationsPanel() {
               {focusDriver != null && (
                 <button
                   onClick={() => setLinkDriver((v) => !v)}
+                  aria-pressed={linkDriver}
                   className={cn(
                     'shrink-0 rounded-md border px-1.5 py-1 text-2xs transition-colors',
                     linkDriver
@@ -114,6 +115,7 @@ export function AnnotationsPanel() {
                     onClick={() => remove(a.id)}
                     className="shrink-0 rounded p-1 text-fg-subtle hover:bg-white/5 hover:text-danger"
                     title="Delete note"
+                    aria-label="Delete note"
                   >
                     <Trash2 className="h-3 w-3" />
                   </button>

@@ -35,7 +35,10 @@ export const Slider = forwardRef<
     <SliderPrimitive.Track className="relative h-1.5 w-full grow overflow-hidden rounded-full bg-white/10">
       <SliderPrimitive.Range className="absolute h-full rounded-full bg-gradient-to-r from-accent/70 to-accent" />
     </SliderPrimitive.Track>
-    <SliderPrimitive.Thumb className="block h-3.5 w-3.5 rounded-full border-2 border-accent bg-black shadow-glow transition-transform hover:scale-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60" />
+    <SliderPrimitive.Thumb
+      aria-label={props['aria-label']}
+      className="block h-3.5 w-3.5 rounded-full border-2 border-accent bg-black shadow-glow transition-transform hover:scale-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
+    />
   </SliderPrimitive.Root>
 ))
 Slider.displayName = 'Slider'

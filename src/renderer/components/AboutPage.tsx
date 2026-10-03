@@ -1,6 +1,54 @@
+import { useEffect, useState } from 'react'
 import { Zap, ShieldCheck, Github, Database, Scale, Gauge } from 'lucide-react'
 import { useAppStore } from '@renderer/store/appStore'
-import { useSessionStore } from '@renderer/store/sessionStore'
+import { getDerivationTimingStats, useSessionStore } from '@renderer/store/sessionStore'
+import { formatP50P95 } from '@renderer/core/engines/DerivationTimings'
+
+const TIMING_REFRESH_MS = 3_000
+
+/** Polls the non-reactive timing rings on mount and every few seconds, never per tick. */
+function DerivationTimingCard() {
+  const [stats, setStats] = useState(getDerivationTimingStats)
+  useEffect(() => {
+    const id = setInterval(() => setStats(getDerivationTimingStats()), TIMING_REFRESH_MS)
+    return () => clearInterval(id)
+  }, [])
+
+  const samples = stats.snapshotBuild?.count ?? 0
+  const rows: Array<[string, string]> = [
+    ['Snapshot build p50 / p95', formatP50P95(stats.snapshotBuild)],
+    ['Fan-out p50 / p95', formatP50P95(stats.fanOut)],
+    ['Widget render p50 / p95', formatP50P95(stats.widgetRender)],
+    [
+      'Max build / fan-out',
+      stats.snapshotBuild && stats.fanOut
+        ? `${stats.snapshotBuild.max.toFixed(1)} / ${stats.fanOut.max.toFixed(1)}`
+        : '—'
+    ],
+    ['Samples', String(samples)]
+  ]
+
+  return (
+    <div className="glass rounded-2xl p-4">
+      <div className="mb-2 flex items-center gap-2">
+        <Gauge className="h-4 w-4 text-accent" />
+        <h2 className="text-sm font-semibold text-fg">Derivation timing (ms)</h2>
+      </div>
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
+        {rows.map(([k, v]) => (
+          <div key={k}>
+            <div className="text-2xs uppercase tracking-wide text-fg-subtle">{k}</div>
+            <div className="tnum text-sm font-semibold text-fg">{v}</div>
+          </div>
+        ))}
+      </div>
+      <p className="mt-2 text-2xs text-fg-subtle">
+        Rolling window of recent recomputes, refreshed every few seconds. Widget render is measured
+        in dev builds only.
+      </p>
+    </div>
+  )
+}
 
 export function AboutPage() {
   const info = useAppStore((s) => s.info)
@@ -106,6 +154,8 @@ export function AboutPage() {
             <Github className="h-3.5 w-3.5" /> RaceDeck — built as a next-generation race companion.
           </div>
         </div>
+
+        <DerivationTimingCard />
 
         {currentSession && (
           <div className="glass rounded-2xl p-4">

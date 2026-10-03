@@ -10,7 +10,7 @@ import {
   X
 } from 'lucide-react'
 import { WidgetFrame } from '@renderer/components/ui/WidgetFrame'
-import { EmptyState, Badge, Button } from '@renderer/components/ui/primitives'
+import { EmptyState, Badge, Button, FOCUS_RING } from '@renderer/components/ui/primitives'
 import { useSessionStore } from '@renderer/store/sessionStore'
 import { useFocusDriver, pickDriver } from '@renderer/lib/useFocusDriver'
 import {
@@ -81,6 +81,7 @@ function RivalCard({
       onClick={() => pickDriver(rival.number)}
       className={cn(
         'w-full rounded-lg border px-2.5 py-1.5 text-left transition-colors hover:brightness-110',
+        FOCUS_RING,
         toneClass
       )}
     >
@@ -254,6 +255,7 @@ export function PaceBattlePanel() {
             value={manualA}
             onChange={setManualA}
             color={colorOf(manualA)}
+            label="First driver"
           />
           <span className="text-2xs font-semibold uppercase tracking-widest text-fg-subtle">
             vs
@@ -263,6 +265,7 @@ export function PaceBattlePanel() {
             value={manualB}
             onChange={setManualB}
             color={colorOf(manualB)}
+            label="Second driver"
           />
         </div>
       )}

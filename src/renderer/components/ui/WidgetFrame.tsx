@@ -1,9 +1,12 @@
 import { type ReactNode } from 'react'
 import { cn } from '@renderer/lib/utils'
+import { useSettingsStore } from '@renderer/store/settingsStore'
 
 /**
  * WidgetFrame — the glass panel shell used by every dashboard widget.
  * Its header doubles as the react-grid-layout drag handle (`.rd-drag-handle`).
+ * Performance mode drops the panel's backdrop blur (`glass-flat`): a blur per
+ * widget is a full-panel GPU pass on every repaint.
  */
 export function WidgetFrame({
   title,
@@ -28,6 +31,7 @@ export function WidgetFrame({
   noPadding?: boolean
   scroll?: boolean
 }) {
+  const performanceMode = useSettingsStore((s) => s.performanceMode)
   return (
     <div
       role="region"
@@ -35,6 +39,7 @@ export function WidgetFrame({
       tabIndex={0}
       className={cn(
         'glass relative flex h-full w-full flex-col overflow-hidden rounded-2xl',
+        performanceMode && 'glass-flat',
         'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60',
         accent && 'accent-top',
         className

@@ -7,7 +7,9 @@ import {
   Radio,
   Minus,
   Plus,
-  AlertTriangle
+  AlertTriangle,
+  Info,
+  Loader2
 } from 'lucide-react'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import { useSessionStore } from '@renderer/store/sessionStore'
@@ -15,6 +17,8 @@ import { useAlertStore } from '@renderer/store/alertStore'
 import { useAppStore } from '@renderer/store/appStore'
 import { useSyncStore } from '@renderer/store/syncStore'
 import { useLiveStore } from '@renderer/store/liveStore'
+import { usePersistStatusStore } from '@renderer/store/persistStatusStore'
+import { persist } from '@renderer/store/persist'
 import { Tooltip } from '@renderer/components/ui/controls'
 import { formatDuration, formatOffset } from '@renderer/lib/utils'
 import { cn } from '@renderer/lib/utils'
@@ -41,6 +45,12 @@ function runRecoveryAction(id: SystemStatusEntry['recoveryActionId']): void {
     case 'retry-session':
       void useSessionStore.getState().reloadSession()
       break
+    case 'reset-corrupted-data':
+      void persist.resetCorrupted()
+      break
+    case 'dismiss-persist-recovery':
+      usePersistStatusStore.getState().dismissRecovery()
+      break
   }
 }
 
@@ -48,7 +58,9 @@ const RECOVERY_LABEL: Record<NonNullable<SystemStatusEntry['recoveryActionId']>,
   'sign-in': 'Sign in',
   reconnect: 'Reconnect',
   'recalibrate-sync': 'Recalibrate sync',
-  'retry-session': 'Retry'
+  'retry-session': 'Retry',
+  'reset-corrupted-data': 'Reset to defaults',
+  'dismiss-persist-recovery': 'Dismiss'
 }
 
 /** Unified error/recovery panel (APP_IMPROVEMENT_ROADMAP.md P2 item 28). */
@@ -56,10 +68,14 @@ function IssuesIndicator() {
   const sessionError = useSessionStore((s) => s.error)
   const liveStatus = useLiveStore((s) => s.status)
   const loggedIn = useLiveStore((s) => s.loggedIn)
+  const reconnect = useLiveStore((s) => s.reconnect)
   const follow = useSyncStore((s) => s.follow)
   const info = useAppStore((s) => s.info)
   const getDiagnostics = useSessionStore((s) => s.getDiagnostics)
+  const persistCorruptions = usePersistStatusStore((s) => s.corruptions)
+  const persistRecoveredBackup = usePersistStatusStore((s) => s.recoveredBackup)
 
+  const diagnostics = getDiagnostics()
   const entries = buildSystemStatus({
     sessionError,
     liveStatus,
@@ -68,23 +84,52 @@ function IssuesIndicator() {
     followDetail: follow.detail,
     drmCapable: info?.drmCapable ?? false,
     drmReady: info?.drmReady ?? false,
-    enrichmentIssue: getDiagnostics()?.enrichmentIssue ?? null
+    enrichmentIssue: diagnostics?.enrichmentIssue ?? null,
+    enrichmentProgress: diagnostics?.enrichmentProgress ?? null,
+    feedQuality: diagnostics?.feedQuality ?? null,
+    persistCorruptions,
+    persistRecoveredBackup,
+    reconnect
   })
 
   if (entries.length === 0) return null
 
+  // Running-normally progress and informational notes are listed but are not
+  // issues, so they neither inflate the count nor take the warning styling.
+  const issueCount = entries.filter((e) => !e.ongoing && !e.informational).length
+  const progressEntry = entries.find((e) => e.ongoing)
+  const noteEntry = entries.find((e) => e.informational)
+
   return (
     <DropdownMenu.Root>
       <DropdownMenu.Trigger asChild>
-        <button
-          className="no-drag flex items-center gap-1"
-          title={`${entries.length} active issue${entries.length === 1 ? '' : 's'}`}
-        >
-          <AlertTriangle className="h-3 w-3 text-warn" />
-          <span className="text-warn">
-            {entries.length} issue{entries.length === 1 ? '' : 's'}
-          </span>
-        </button>
+        {issueCount > 0 ? (
+          <button
+            className="no-drag flex items-center gap-1"
+            title={`${issueCount} active issue${issueCount === 1 ? '' : 's'}`}
+          >
+            <AlertTriangle className="h-3 w-3 text-warn" />
+            <span className="text-warn">
+              {issueCount} issue{issueCount === 1 ? '' : 's'}
+            </span>
+          </button>
+        ) : progressEntry ? (
+          <button
+            className="no-drag flex max-w-[28rem] items-center gap-1"
+            title={progressEntry.message}
+          >
+            <Loader2 className="h-3 w-3 shrink-0 animate-spin text-fg-subtle" aria-hidden="true" />
+            <span className="tnum truncate text-fg-muted">{progressEntry.message}</span>
+          </button>
+        ) : (
+          <button
+            className="no-drag flex items-center gap-1 text-fg-subtle"
+            title={noteEntry?.message}
+          >
+            <Info className="h-3 w-3" aria-hidden="true" />
+            <span>Data notes</span>
+          </button>
+        )}
       </DropdownMenu.Trigger>
       <DropdownMenu.Portal>
         <DropdownMenu.Content

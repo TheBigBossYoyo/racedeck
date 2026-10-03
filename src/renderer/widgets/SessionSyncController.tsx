@@ -229,6 +229,7 @@ export function SessionSyncController() {
             max={-SYNC_MIN_OFFSET}
             step={0.5}
             value={[dataShift]}
+            aria-label="Data fine-tune offset in seconds"
             onValueChange={([v]) => setOffset(-v)}
           />
           <p className="mt-1.5 text-2xs leading-snug text-fg-subtle">
@@ -280,7 +281,8 @@ export function SessionSyncController() {
                   </button>
                   <button
                     onClick={() => removeSyncPreset(p.id)}
-                    className="text-fg-subtle opacity-0 transition-opacity hover:text-danger group-hover:opacity-100"
+                    aria-label={`Remove preset ${p.name}`}
+                    className="rounded text-fg-subtle opacity-0 transition-opacity hover:text-danger group-hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
                   >
                     <X className="h-2.5 w-2.5" />
                   </button>

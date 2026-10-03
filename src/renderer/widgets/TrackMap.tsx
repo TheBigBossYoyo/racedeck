@@ -8,12 +8,12 @@ import { formatStaleness, hexColor } from '@renderer/lib/utils'
 import {
   calculateBounds,
   normalizePoint,
-  normalizePoints,
   unionBounds,
   type Bounds,
   type Point
 } from '@renderer/core/engines/geometry'
 import { placeTrackMapLabels } from './trackMap/labelLayout'
+import { createOutlinePathMemo } from './trackMap/outlinePath'
 import { TrackMapDriverMarker } from './trackMap/TrackMapDriverMarker'
 import {
   reconcileLivePositions,
@@ -21,6 +21,13 @@ import {
   type PositionTrack
 } from './trackMap/positionTracking'
 import type { DriverDot } from './trackMap/types'
+import type { TrackStatus } from '@shared/models'
+
+const TRACK_STATUS_LABEL: Partial<Record<TrackStatus, string>> = {
+  SAFETY_CAR: 'safety car deployed',
+  VSC: 'virtual safety car',
+  RED: 'red flag'
+}
 
 const CX = 150
 const CY = 100
@@ -34,6 +41,9 @@ const REPLAY_INTERPOLATION_PERFORMANCE_MS = 620
 const POSITION_STALE_MS = 5_000
 /** Dead-reckoning distance cap: ~5% of the 300x200 viewBox diagonal. */
 const MAX_EXTRAPOLATION_DISTANCE = 0.05 * Math.hypot(300, 200)
+
+/** Stable identity for "no trace yet", so the trace-keyed memos below hold. */
+const NO_TRACE: Point[] = []
 
 interface TrackGeometry {
   bounds: ReturnType<typeof calculateBounds>
@@ -79,7 +89,7 @@ export function TrackMap() {
   const hasCoordinatePositions = snapshot?.availability.positions === true
   const isLiveSnapshot = snapshot?.availability.live === true
 
-  const trace = snapshot?.trackPath ?? []
+  const trace = snapshot?.trackPath ?? NO_TRACE
   const traceBounds = useMemo(() => calculateBounds(trace), [trace])
 
   // Framing is sticky: once the map has been sized to a circuit it never
@@ -94,6 +104,8 @@ export function TrackMap() {
   const labelPlacementsRef = useRef<Map<number, ReturnType<typeof placeTrackMapLabels>[0]>>(
     new Map()
   )
+
+  const outlinePath = useMemo(() => createOutlinePathMemo(), [])
 
   const geometry = useMemo<TrackGeometry>(() => {
     if (!snapshot) return { bounds: null, path: '', dots: [] }
@@ -145,9 +157,7 @@ export function TrackMap() {
         // The outline MUST be normalized against the very same box as the cars,
         // or the circuit and the field are drawn in two different frames.
         if (trace.length >= 2) {
-          path = normalizePoints(trace, currentBounds, config)
-            .map((point) => `${point.x},${point.y}`)
-            .join(' ')
+          path = outlinePath(trace, currentBounds, config)
         }
 
         for (const p of snapshot.positions) {
@@ -233,7 +243,7 @@ export function TrackMap() {
       path,
       dots: finalDots.sort((a, b) => (b.position ?? 99) - (a.position ?? 99))
     }
-  }, [snapshot, hasCoordinatePositions, trace, traceBounds])
+  }, [snapshot, hasCoordinatePositions, trace, traceBounds, outlinePath])
 
   const dots = geometry.dots
   const favoriteNumbers = useMemo(() => new Set(favorites), [favorites])
@@ -287,6 +297,9 @@ export function TrackMap() {
         : 'rgb(var(--fg-subtle))'
 
   const stale = formatStaleness(snapshot.feedFreshness?.Position, POSITION_STALE_MS)
+  const trackStatusLabel = TRACK_STATUS_LABEL[snapshot.trackStatus] ?? null
+  // The halo's amber/red tint is the only on-map signal of a neutralised or red-flagged track.
+  const mapLabel = trackStatusLabel ? `Track map, ${trackStatusLabel}` : 'Track map'
 
   return (
     <WidgetFrame
@@ -328,7 +341,8 @@ export function TrackMap() {
       scroll={false}
     >
       <div className="flex h-full w-full items-center justify-center p-2">
-        <svg viewBox="0 0 300 200" className="h-full w-full">
+        <svg viewBox="0 0 300 200" className="h-full w-full" role="group" aria-label={mapLabel}>
+          <title>{mapLabel}</title>
           {hasCoordinatePositions && geometry.path ? (
             <>
               {/* Soft halo carrying track-status colour (grey/amber/red), then a

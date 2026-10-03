@@ -4,9 +4,42 @@ import { EmptyState, TyrePill, Badge } from '@renderer/components/ui/primitives'
 import { useSessionStore } from '@renderer/store/sessionStore'
 import { Chart, gridBase, tooltipBase, cssVar } from '@renderer/lib/echarts'
 import { hexColor } from '@renderer/lib/utils'
+import { convertSpeed, speedUnitLabel, type SpeedUnit } from '@renderer/lib/units'
+import { useSettingsStore } from '@renderer/store/settingsStore'
 import { useLastGood } from '@renderer/lib/useLastGood'
+import { useSampledValue } from '@renderer/lib/useSampledValue'
 import type { EChartsCoreOption } from 'echarts/core'
 import type { AeroMode } from '@shared/models'
+
+/** Trace refresh cadence. The 60 s window is drawn at 1 Hz; per-snapshot rebuilds are wasted work. */
+const TRACE_REFRESH_MS = 1_000
+
+// One formatter for every sample: constructing it is far costlier than format().
+// Same options `toLocaleTimeString('en-GB', { hour12: false })` resolves to.
+const TRACE_TIME_FORMAT = new Intl.DateTimeFormat('en-GB', {
+  hour: 'numeric',
+  minute: 'numeric',
+  second: 'numeric',
+  hour12: false
+})
+
+/** HH:MM:SS (24 h, en-GB) label for a telemetry sample timestamp. */
+export function formatTraceTime(date: string | number | Date): string {
+  return TRACE_TIME_FORMAT.format(new Date(date))
+}
+
+/** Speed-panel scale for the user's speed unit; the feed's native km/h is passed through untouched. */
+export function speedTraceScale(unit: SpeedUnit): {
+  readonly seriesName: string
+  readonly axisMax: number
+  readonly convert: (kmh: number) => number
+} {
+  return {
+    seriesName: `Speed (${speedUnitLabel(unit)})`,
+    axisMax: Math.round(convertSpeed(350, unit)),
+    convert: (kmh) => convertSpeed(kmh, unit)
+  }
+}
 
 /** Compact active-aero mode badge. Hidden (null) when no data. */
 function AeroModeBadge({ mode }: { mode: AeroMode | null }) {
@@ -28,9 +61,11 @@ function AeroModeBadge({ mode }: { mode: AeroMode | null }) {
 }
 
 export function TelemetryTracePanel() {
-  const snapshot = useSessionStore((s) => s.snapshot)
+  const liveSnapshot = useSessionStore((s) => s.snapshot)
+  const snapshot = useSampledValue(liveSnapshot, TRACE_REFRESH_MS, liveSnapshot?.session.id ?? null)
   const getTelemetry = useSessionStore((s) => s.getTelemetry)
   const focusDriver = useSessionStore((s) => s.focusDriver)
+  const speedUnit = useSettingsStore((s) => s.units.speed)
 
   const targetDriver = useMemo(() => {
     if (focusDriver) return focusDriver
@@ -53,10 +88,9 @@ export function TelemetryTracePanel() {
     if (telemetry.length === 0) return null
 
     const color = hexColor(driver.teamColour)
-    const times = telemetry.map((t) =>
-      new Date(t.date).toLocaleTimeString('en-GB', { hour12: false })
-    )
-    const speeds = telemetry.map((t) => t.speed ?? 0)
+    const times = telemetry.map((t) => formatTraceTime(t.date))
+    const speedScale = speedTraceScale(speedUnit)
+    const speeds = telemetry.map((t) => speedScale.convert(t.speed ?? 0))
     const throttles = telemetry.map((t) => t.throttle ?? 0)
     const brakes = telemetry.map((t) => t.brake ?? 0)
     const gears = telemetry.map((t) => t.gear ?? 0)
@@ -69,7 +103,8 @@ export function TelemetryTracePanel() {
           if (!Array.isArray(params)) return ''
           let html = `<b>${params[0].axisValue}</b><br/>`
           params.forEach((p) => {
-            html += `<span style="color:${p.color}">●</span> ${p.seriesName}: <b>${p.value}</b><br/>`
+            const shown = p.seriesIndex === 0 ? Math.round(p.value) : p.value
+            html += `<span style="color:${p.color}">●</span> ${p.seriesName}: <b>${shown}</b><br/>`
           })
           return html
         }
@@ -100,13 +135,13 @@ export function TelemetryTracePanel() {
         { type: 'category', data: times, gridIndex: 2 }
       ],
       yAxis: [
-        { type: 'value', name: 'Speed', gridIndex: 0, min: 0, max: 350, splitNumber: 3 },
+        { type: 'value', name: 'Speed', gridIndex: 0, min: 0, max: speedScale.axisMax, splitNumber: 3 },
         { type: 'value', name: 'Thr/Brk', gridIndex: 1, min: 0, max: 100, splitNumber: 2 },
         { type: 'value', name: 'Gear', gridIndex: 2, min: 0, max: 8, splitNumber: 2, interval: 2 }
       ],
       series: [
         {
-          name: 'Speed',
+          name: speedScale.seriesName,
           type: 'line',
           xAxisIndex: 0,
           yAxisIndex: 0,
@@ -148,7 +183,7 @@ export function TelemetryTracePanel() {
         }
       ]
     }
-  }, [snapshot, getTelemetry, targetDriver])
+  }, [snapshot, getTelemetry, targetDriver, speedUnit])
 
   const option = useLastGood(rawOption)
 

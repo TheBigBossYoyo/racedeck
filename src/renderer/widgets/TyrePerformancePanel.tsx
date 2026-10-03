@@ -9,13 +9,23 @@ import { formatLapTime, hexColor } from '@renderer/lib/utils'
 export function TyrePerformancePanel() {
   const snapshot = useSessionStore((s) => s.snapshot)
 
+  // Both engines read only laps, stints, drivers, currentLap and the fuel-fit
+  // inputs (totalLaps, session type), so a clock-only snapshot change must not
+  // re-run them (bestTyrePerTeam is O(laps)).
+  const laps = snapshot?.laps
+  const stints = snapshot?.stints
+  const drivers = snapshot?.drivers
+  const currentLap = snapshot?.currentLap
+  const totalLaps = snapshot?.totalLaps
+  const sessionType = snapshot?.session.type
   const { compounds, teams } = useMemo(() => {
     if (!snapshot) return { compounds: [], teams: [] }
     return {
       compounds: compoundPerformance(snapshot),
       teams: bestTyrePerTeam(snapshot)
     }
-  }, [snapshot])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [laps, stints, drivers, currentLap, totalLaps, sessionType])
 
   if (!snapshot || compounds.length === 0) {
     return (

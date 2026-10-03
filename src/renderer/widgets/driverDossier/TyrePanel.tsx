@@ -44,6 +44,7 @@ function SectorDegradationRow({ sectors }: { readonly sectors: SectorDegradation
               }
             >
               {sectorChipText(s)}
+              {heavy && <span className="sr-only"> (heavy degradation)</span>}
             </div>
           )
         })}

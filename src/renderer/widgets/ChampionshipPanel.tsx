@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Trophy, ChevronUp, ChevronDown, Minus } from 'lucide-react'
 import { WidgetFrame } from '@renderer/components/ui/WidgetFrame'
-import { EmptyState, Badge, Segmented } from '@renderer/components/ui/primitives'
+import { EmptyState, Badge, Segmented, FOCUS_RING_INSET } from '@renderer/components/ui/primitives'
 import { useSessionStore } from '@renderer/store/sessionStore'
 import { useStandingsStore } from '@renderer/store/standingsStore'
 import { projectChampionship } from '@renderer/core/engines/ChampionshipEngine'
@@ -15,8 +15,12 @@ function MovementChip({ delta }: { delta: number }) {
   }
   const up = delta > 0
   return (
-    <span className={cn('inline-flex items-center gap-0.5 text-2xs font-semibold', up ? 'text-good' : 'text-danger')}>
-      {up ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+    <span
+      role="img"
+      aria-label={`${up ? 'up' : 'down'} ${Math.abs(delta)} ${Math.abs(delta) === 1 ? 'place' : 'places'}`}
+      className={cn('inline-flex items-center gap-0.5 text-2xs font-semibold', up ? 'text-good' : 'text-danger')}
+    >
+      {up ? <ChevronUp className="h-3 w-3" aria-hidden="true" /> : <ChevronDown className="h-3 w-3" aria-hidden="true" />}
       {Math.abs(delta)}
     </span>
   )
@@ -127,6 +131,7 @@ export function ChampionshipPanel() {
                   disabled={!focusable}
                   className={cn(
                     'flex w-full items-center gap-2 rounded-lg border border-hairline/15 bg-white/[0.015] px-2 py-1.5 text-left transition-colors',
+                    FOCUS_RING_INSET,
                     focusable && 'hover:bg-white/[0.04]',
                     row.status === 'eliminated' && 'opacity-45'
                   )}

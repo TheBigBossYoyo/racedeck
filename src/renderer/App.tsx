@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect } from 'react'
+import { Component, lazy, Suspense, useEffect, useState, type ErrorInfo, type ReactNode } from 'react'
 import { TooltipProvider } from '@renderer/components/ui/controls'
 import { TitleBar } from '@renderer/components/shell/TitleBar'
 import { Sidebar } from '@renderer/components/shell/Sidebar'
@@ -10,6 +10,7 @@ import { TrackStatusBanner } from '@renderer/components/shell/TrackStatusBanner'
 import { DashboardView } from '@renderer/components/DashboardView'
 import { useAppStore } from '@renderer/store/appStore'
 import { useSettingsStore } from '@renderer/store/settingsStore'
+import { persist } from '@renderer/store/persist'
 import { useSyncStore } from '@renderer/store/syncStore'
 import { useLayoutStore } from '@renderer/store/layoutStore'
 import { useVideoStore } from '@renderer/store/videoStore'
@@ -26,6 +27,9 @@ import { useProfileStore } from '@renderer/store/profileStore'
 import { useComparisonLibraryStore } from '@renderer/store/comparisonLibraryStore'
 import { useRadioTranscriptStore } from '@renderer/store/radioTranscriptStore'
 import { usePluginStore } from '@renderer/store/pluginStore'
+import { errorMessage } from '@renderer/lib/errorMessage'
+import { bridge, hasBridge } from '@renderer/lib/ipc'
+import { STORE_NS } from '@shared/ipc-contract'
 
 const ReplayView = lazy(() =>
   import('@renderer/components/ReplayView').then((module) => ({ default: module.ReplayView }))
@@ -49,11 +53,17 @@ function RouteFallback() {
 }
 
 /** One-time app bootstrap: hydrate persisted state, load data, connect surfaces. */
-function useBootstrap() {
+export function useBootstrap() {
+  // An error thrown inside the async IIFE never reaches an error boundary by itself; parking it
+  // in state and rethrowing during render hands it to RootErrorBoundary (and its reset action).
+  const [fatal, setFatal] = useState<Error | null>(null)
+  if (fatal) throw fatal
+
   useEffect(() => {
     let unsub: (() => void) | undefined
     let cancelled = false
     ;(async () => {
+      await persist.checkRecovery()
       await useSettingsStore.getState().hydrate()
       await Promise.all([
         useSyncStore.getState().hydrate(),
@@ -75,7 +85,10 @@ function useBootstrap() {
       unsub = useSettingsStore.subscribe(applyAlerts)
       useAppStore.getState().setReady(true)
       void useOnboardingStore.getState().hydrate()
-    })()
+    })().catch((error: unknown) => {
+      if (cancelled) return
+      setFatal(error instanceof Error ? error : new Error(errorMessage(error)))
+    })
     return () => {
       cancelled = true
       unsub?.()
@@ -83,7 +96,147 @@ function useBootstrap() {
   }, [])
 }
 
-export function App() {
+/** Wipes every persisted namespace (the Electron store, or localStorage outside the shell). */
+export async function clearSavedData(): Promise<void> {
+  const namespaces = Object.values(STORE_NS)
+  if (hasBridge()) {
+    const api = bridge()
+    await Promise.all(namespaces.map((ns) => api.store.clearNamespace(ns)))
+    return
+  }
+  try {
+    const prefixes = namespaces.map((ns) => `${ns}:`)
+    const stale: string[] = []
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i)
+      if (key && prefixes.some((prefix) => key.startsWith(prefix))) stale.push(key)
+    }
+    for (const key of stale) localStorage.removeItem(key)
+  } catch {
+    /* storage unavailable: there is nothing persisted to clear */
+  }
+}
+
+interface RootErrorBoundaryProps {
+  children?: ReactNode
+  /** Injectable so tests need not touch window.location. */
+  onReload?: () => void
+  /** Injectable for the same reason; defaults to {@link clearSavedData}. */
+  onResetData?: () => Promise<void>
+}
+
+interface RootErrorBoundaryState {
+  error: Error | null
+  confirmingReset: boolean
+  resetting: boolean
+  resetError: string | null
+}
+
+/**
+ * Last line of defence: a crash in any shell component (TitleBar, banners, StatusBar...)
+ * would otherwise unmount the whole React tree to a blank window (see React #185 from
+ * TrackStatusBanner). Per-widget crashes are isolated earlier by WidgetErrorBoundary.
+ * Deliberately dependency-free (plain elements, no stores) so the fallback can't crash too.
+ */
+export class RootErrorBoundary extends Component<RootErrorBoundaryProps, RootErrorBoundaryState> {
+  state: RootErrorBoundaryState = {
+    error: null,
+    confirmingReset: false,
+    resetting: false,
+    resetError: null
+  }
+
+  static getDerivedStateFromError(error: unknown): Partial<RootErrorBoundaryState> {
+    return { error: error instanceof Error ? error : new Error(errorMessage(error)) }
+  }
+
+  componentDidCatch(error: Error, info: ErrorInfo): void {
+    console.error('[RootErrorBoundary] app shell crashed:', error, info.componentStack)
+  }
+
+  private reload = (): void => (this.props.onReload ?? (() => window.location.reload()))()
+
+  private askReset = (): void => this.setState({ confirmingReset: true, resetError: null })
+
+  private cancelReset = (): void => this.setState({ confirmingReset: false })
+
+  private confirmReset = async (): Promise<void> => {
+    this.setState({ resetting: true, resetError: null })
+    try {
+      await (this.props.onResetData ?? clearSavedData)()
+    } catch (e) {
+      this.setState({ resetting: false, resetError: errorMessage(e) })
+      return
+    }
+    this.reload()
+  }
+
+  render(): ReactNode {
+    const { error, confirmingReset, resetting, resetError } = this.state
+    if (!error) return this.props.children
+
+    return (
+      <div
+        role="alert"
+        className="flex h-screen flex-col items-center justify-center gap-3 bg-bg-base p-6 text-center"
+      >
+        <h1 className="text-lg font-semibold text-fg">Something went wrong</h1>
+        <p className="max-w-md text-sm text-fg-muted">
+          RaceDeck hit an unexpected error and had to stop. Your saved settings and layouts are
+          untouched. Reloading usually fixes it.
+        </p>
+        <p className="mono max-w-md break-words text-2xs text-fg-subtle">{error.message}</p>
+        <button
+          type="button"
+          onClick={this.reload}
+          className="rounded-md border border-hairline/40 px-3 py-1.5 text-sm text-fg hover:bg-white/5"
+        >
+          Reload RaceDeck
+        </button>
+        {confirmingReset ? (
+          <div className="flex max-w-md flex-col items-center gap-2" role="group" aria-label="Confirm reset">
+            <p className="text-sm text-fg-muted">
+              This clears layouts, preferences and the saved AI key.
+            </p>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={this.confirmReset}
+                disabled={resetting}
+                className="rounded-md border border-danger/50 px-3 py-1.5 text-sm text-danger hover:bg-danger/10 disabled:opacity-50"
+              >
+                {resetting ? 'Resetting…' : 'Yes, reset and reload'}
+              </button>
+              <button
+                type="button"
+                onClick={this.cancelReset}
+                disabled={resetting}
+                className="rounded-md border border-hairline/40 px-3 py-1.5 text-sm text-fg hover:bg-white/5 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        ) : (
+          <button
+            type="button"
+            onClick={this.askReset}
+            className="rounded-md px-3 py-1.5 text-xs text-fg-subtle underline hover:text-danger"
+          >
+            Reset saved settings and reload
+          </button>
+        )}
+        {resetError && (
+          <p className="mono max-w-md break-words text-2xs text-danger">
+            Could not reset saved data: {resetError}
+          </p>
+        )}
+      </div>
+    )
+  }
+}
+
+function AppShell() {
   const route = useAppStore((s) => s.route)
   useBootstrap()
   useKeyboardShortcuts()
@@ -115,5 +268,13 @@ export function App() {
         <WelcomeTour />
       </div>
     </TooltipProvider>
+  )
+}
+
+export function App() {
+  return (
+    <RootErrorBoundary>
+      <AppShell />
+    </RootErrorBoundary>
   )
 }

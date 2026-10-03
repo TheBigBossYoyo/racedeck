@@ -93,6 +93,7 @@ export function BattleLine({
         {rival.gapSec != null ? `${rival.gapSec.toFixed(1)}s` : '-'}
       </span>
       <span className={cn('ml-auto', tone)}>
+        {rival.closing && <span className="sr-only">closing, </span>}
         {rival.deltaPerLap == null
           ? '-'
           : `${rival.deltaPerLap > 0 ? '+' : ''}${rival.deltaPerLap.toFixed(2)}s/lap${

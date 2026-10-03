@@ -157,7 +157,13 @@ export function PluginsPanel() {
                         )}
                         Run
                       </Button>
-                      <Button size="icon-sm" variant="ghost" onClick={() => remove(p.id)}>
+                      <Button
+                        size="icon-sm"
+                        variant="ghost"
+                        onClick={() => remove(p.id)}
+                        title="Remove plugin"
+                        aria-label={`Remove plugin ${p.name}`}
+                      >
                         <Trash2 className="h-3.5 w-3.5" />
                       </Button>
                     </div>

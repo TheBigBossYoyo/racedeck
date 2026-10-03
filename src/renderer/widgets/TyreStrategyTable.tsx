@@ -1,11 +1,26 @@
 import { useMemo } from 'react'
 import { WidgetFrame } from '@renderer/components/ui/WidgetFrame'
-import { EmptyState, TeamStripe } from '@renderer/components/ui/primitives'
+import { EmptyState, FOCUS_RING_INSET, TeamStripe } from '@renderer/components/ui/primitives'
 import { useSessionStore } from '@renderer/store/sessionStore'
 import { TYRE_LABELS } from '@shared/constants'
 import { useTyreColors } from '@renderer/lib/useTyreColors'
 import { cn } from '@renderer/lib/utils'
 import type { Stint } from '@shared/models'
+
+/**
+ * Screen-reader name for a strategy row. The bars carry compound by colour (and
+ * a letter only when the stint is wide enough), so the stints are spelled out.
+ */
+export function strategyRowLabel(
+  code: string,
+  stints: readonly Stint[],
+  currentLap: number
+): string {
+  const parts = stints.map(
+    (st) => `${st.tyre.compound} laps ${st.lapStart} to ${st.lapEnd ?? currentLap}`
+  )
+  return `${code}: ${parts.join(', then ')}`
+}
 
 export function TyreStrategyTable() {
   const snapshot = useSessionStore((s) => s.snapshot)
@@ -60,8 +75,11 @@ export function TyreStrategyTable() {
           <button
             key={r.number}
             onClick={() => setFocus(r.number)}
+            aria-label={strategyRowLabel(r.code, r.stints, currentLap)}
+            aria-pressed={focusDriver === r.number}
             className={cn(
               'flex items-center gap-2 px-2 py-1 text-left transition-colors',
+              FOCUS_RING_INSET,
               focusDriver === r.number ? 'bg-accent/10' : 'hover:bg-white/[0.03]'
             )}
           >

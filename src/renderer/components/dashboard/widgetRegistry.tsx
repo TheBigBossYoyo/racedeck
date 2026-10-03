@@ -1,6 +1,8 @@
-import { memo, lazy, Suspense, type ComponentType } from 'react'
+import { memo, lazy, Suspense, useMemo, type ComponentType } from 'react'
 import type { WidgetKey } from '@renderer/core/engines/LayoutManager'
 import { DiagnosticProfiler } from '@renderer/lib/renderDiagnostics'
+import { WidgetErrorBoundary } from './WidgetErrorBoundary'
+import { useSessionStore } from '@renderer/store/sessionStore'
 import { TodVideoPanel } from '@renderer/widgets/TodVideoPanel'
 import { TimingTower } from '@renderer/widgets/TimingTower'
 import { TrackMap } from '@renderer/widgets/TrackMap'
@@ -49,6 +51,9 @@ const StrategyInsightsWidget = lazyWidget(() =>
 )
 const PitStopPredictorWidget = lazyWidget(() =>
   import('@renderer/widgets/PitStopPredictor').then((m) => ({ default: m.PitStopPredictor }))
+)
+const PitEventLogWidget = lazyWidget(() =>
+  import('@renderer/widgets/PitEventLogPanel').then((m) => ({ default: m.PitEventLogPanel }))
 )
 const StintPlannerWidget = lazyWidget(() =>
   import('@renderer/widgets/StintPlanner').then((m) => ({ default: m.StintPlanner }))
@@ -130,6 +135,7 @@ const REGISTRY: Record<WidgetKey, React.ComponentType> = {
   telemetry: TelemetryTracePanelWidget,
   'strategy-insights': StrategyInsightsWidget,
   'pit-predictor': PitStopPredictorWidget,
+  'pit-log': PitEventLogWidget,
   'stint-planner': StintPlannerWidget,
   'pace-battle': PaceBattleWidget,
   'driver-dossier': DriverDossierWidget,
@@ -150,15 +156,34 @@ const REGISTRY: Record<WidgetKey, React.ComponentType> = {
   plugins: PluginsPanelWidget
 }
 
+/**
+ * One value per session-second. A crashed widget retries when it changes, so a
+ * single bad tick heals itself, but a widget that keeps crashing retries (and
+ * logs) at most once a second rather than on every 4-12 Hz snapshot.
+ */
+const selectResetKey = (s: { currentSession: { id: string } | null; clock: number }): string =>
+  `${s.currentSession?.id ?? ''}:${Math.floor(s.clock)}`
+
 export const WidgetRenderer = memo(function WidgetRenderer({
   widgetKey
 }: {
   widgetKey: WidgetKey
 }) {
   const Component = REGISTRY[widgetKey]
+  const resetKey = useSessionStore(selectResetKey)
+  // Same element reference across the once-a-second wrapper re-render, so React
+  // skips the widget itself; it still subscribes to the stores it needs.
+  const child = useMemo(
+    () => (
+      <DiagnosticProfiler id={widgetKey}>
+        <Component />
+      </DiagnosticProfiler>
+    ),
+    [widgetKey, Component]
+  )
   return (
-    <DiagnosticProfiler id={widgetKey}>
-      <Component />
-    </DiagnosticProfiler>
+    <WidgetErrorBoundary widgetKey={widgetKey} resetKeys={[resetKey]}>
+      {child}
+    </WidgetErrorBoundary>
   )
 })

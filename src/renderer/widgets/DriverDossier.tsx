@@ -11,7 +11,7 @@ import {
   Pause
 } from 'lucide-react'
 import { WidgetFrame } from '@renderer/components/ui/WidgetFrame'
-import { EmptyState, Badge, TyrePill } from '@renderer/components/ui/primitives'
+import { EmptyState, Badge, TyrePill, FOCUS_RING_INSET } from '@renderer/components/ui/primitives'
 import { ErsGauge } from '@renderer/components/ui/ErsGauge'
 import { useSessionStore } from '@renderer/store/sessionStore'
 import { useSettingsStore } from '@renderer/store/settingsStore'
@@ -38,11 +38,18 @@ import {
 } from '@renderer/widgets/driverDossier/DossierDetails'
 import type { AeroMode, SectorTime } from '@shared/models'
 import { formatLapTime, formatGap, hexColor, cn } from '@renderer/lib/utils'
+import { formatClockShort } from '@renderer/lib/units'
 
 const SECTOR_TONE: Record<SectorTime['state'], string> = {
   none: 'text-fg',
   'personal-best': 'text-good',
   'session-best': 'text-purple'
+}
+
+/** Non-colour form of a sector's state; `none` needs no marker. */
+const SECTOR_STATE_LABEL: Partial<Record<SectorTime['state'], string>> = {
+  'personal-best': 'personal best',
+  'session-best': 'session best'
 }
 
 /**
@@ -55,6 +62,7 @@ function DossierRadioList({ clips }: { clips: { url: string; utc: string }[] }) 
   const togglePlayback = useRadioPlaybackStore((s) => s.toggle)
   const ai = useSettingsStore((s) => s.ai)
   const transcriptionOk = isTranscriptionReady(ai)
+  const clockUnit = useSettingsStore((s) => s.units.clock)
   const play = (url: string, utc: string) => {
     togglePlayback(url)
     seekToRadioClip(utc)
@@ -80,7 +88,9 @@ function DossierRadioList({ clips }: { clips: { url: string; utc: string }[] }) 
               <button
                 type="button"
                 onClick={() => play(clip.url, clip.utc)}
-                className="flex w-full items-center gap-2 text-left"
+                aria-label={`${isPlaying ? 'Pause' : 'Play'} radio clip at ${formatClockShort(clip.utc, clockUnit)}`}
+                aria-pressed={isPlaying}
+                className={cn('flex w-full items-center gap-2 rounded text-left', FOCUS_RING_INSET)}
               >
                 {isPlaying ? (
                   <Pause className="h-3 w-3 shrink-0 text-accent" />
@@ -88,10 +98,7 @@ function DossierRadioList({ clips }: { clips: { url: string; utc: string }[] }) 
                   <Play className="h-3 w-3 shrink-0 text-fg-muted" />
                 )}
                 <span className="tnum ml-auto text-fg-subtle">
-                  {new Date(clip.utc).toLocaleTimeString([], {
-                    hour: '2-digit',
-                    minute: '2-digit'
-                  })}
+                  {formatClockShort(clip.utc, clockUnit)}
                 </span>
               </button>
               {transcriptionOk && <TranscribeAction url={clip.url} />}
@@ -204,6 +211,7 @@ export function DriverDossier() {
               aria-pressed={active}
               className={cn(
                 'relative z-10 flex shrink-0 items-center gap-1 rounded-md border px-1.5 py-1 text-[11px] font-bold transition-colors',
+                FOCUS_RING_INSET,
                 active
                   ? 'border-accent/50 bg-accent/15 text-fg'
                   : 'border-hairline/25 text-fg-muted hover:bg-white/5'
@@ -295,9 +303,17 @@ export function DriverDossier() {
                   key={i}
                   className="rounded-lg border border-hairline/15 bg-black/20 px-2 py-1 text-center"
                 >
-                  <div className="text-[9px] uppercase tracking-wide text-fg-subtle">S{i + 1}</div>
+                  <div
+                    className="text-[9px] uppercase tracking-wide text-fg-subtle"
+                    title={SECTOR_STATE_LABEL[s.state]}
+                  >
+                    S{i + 1}
+                  </div>
                   <div className={cn('tnum text-xs font-semibold', SECTOR_TONE[s.state])}>
                     {s.seconds != null ? s.seconds.toFixed(3) : '—'}
+                    {SECTOR_STATE_LABEL[s.state] && (
+                      <span className="sr-only"> ({SECTOR_STATE_LABEL[s.state]})</span>
+                    )}
                   </div>
                 </div>
               )

@@ -33,6 +33,16 @@ const buttonVariants = cva(
   }
 )
 
+/**
+ * Explicit keyboard-focus ring for row/list buttons that are not a `Button`.
+ * The `Inset` form is for rows inside a clipped (overflow-hidden) scroll body,
+ * where an outer ring would be cut off at the panel edge.
+ */
+export const FOCUS_RING =
+  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60'
+export const FOCUS_RING_INSET =
+  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/60'
+
 export interface ButtonProps
   extends ButtonHTMLAttributes<HTMLButtonElement>, VariantProps<typeof buttonVariants> {}
 
@@ -59,6 +69,7 @@ export function Segmented<T extends string>({
 }) {
   return (
     <div
+      role="group"
       className={cn(
         'no-drag inline-flex items-center gap-0.5 rounded-lg border border-hairline/30 bg-black/20 p-0.5',
         className
@@ -67,10 +78,13 @@ export function Segmented<T extends string>({
       {options.map((o) => (
         <button
           key={o.value}
+          type="button"
           title={o.title}
+          aria-pressed={value === o.value}
           onClick={() => onChange(o.value)}
           className={cn(
             'rounded-md font-medium transition-all',
+            FOCUS_RING_INSET,
             size === 'sm' ? 'px-2 py-1 text-2xs' : 'px-3 py-1.5 text-xs',
             value === o.value
               ? 'bg-accent/20 text-accent shadow-inner-hairline'
@@ -205,10 +219,13 @@ export function TeamStripe({ color }: { color: string | null }) {
 
 export function StatusDot({
   tone,
-  pulse = false
+  pulse = false,
+  label
 }: {
   tone: 'good' | 'warn' | 'danger' | 'neutral' | 'accent'
   pulse?: boolean
+  /** Text alternative for a dot that stands alone; omit when adjacent text already says it. */
+  label?: string
 }) {
   const colors: Record<string, string> = {
     good: 'bg-good',
@@ -218,7 +235,10 @@ export function StatusDot({
     accent: 'bg-accent'
   }
   return (
-    <span className="relative inline-flex h-2 w-2">
+    <span
+      className="relative inline-flex h-2 w-2"
+      {...(label ? { role: 'img', 'aria-label': label, title: label } : { 'aria-hidden': true })}
+    >
       {pulse && (
         <span
           className={cn(

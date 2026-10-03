@@ -1,17 +1,29 @@
 import { useMemo, useState } from 'react'
-import { Star, TriangleAlert } from 'lucide-react'
+import { Clock, Star, TriangleAlert } from 'lucide-react'
 import { WidgetFrame } from '@renderer/components/ui/WidgetFrame'
-import { Badge, EmptyState, TyrePill, TeamStripe } from '@renderer/components/ui/primitives'
+import {
+  Badge,
+  EmptyState,
+  FOCUS_RING_INSET,
+  TyrePill,
+  TeamStripe
+} from '@renderer/components/ui/primitives'
 import { ErsBar } from '@renderer/components/ui/ErsGauge'
 import { useSessionStore } from '@renderer/store/sessionStore'
 import { useSettingsStore } from '@renderer/store/settingsStore'
 import { formatGap, formatLapTime, formatStaleness, cn } from '@renderer/lib/utils'
 import { pickDriver } from '@renderer/lib/useFocusDriver'
-import { sectorDisplayState, type SectorDisplayState } from '@renderer/core/providers/f1normalize'
-import type { TimingEntry } from '@shared/models'
+import { sectorDisplayState, type SectorDisplayState } from '@renderer/core/normalize/sectorDisplay'
+import {
+  DRIVER_FEED_LABEL,
+  DRIVER_STALE_MS,
+  staleDriverFeeds,
+  type StaleDriverFeed
+} from '@renderer/lib/driverStaleness'
+import type { DriverStatus, TimingEntry } from '@shared/models'
 
 /** TimingData is a lower-rate feed than Position/CarData; a longer quiet spell means it stopped. */
-const TIMING_STALE_MS = 15_000
+const TIMING_STALE_MS = DRIVER_STALE_MS.TimingData
 
 // Color is never the only encoding (APP_IMPROVEMENT_ROADMAP.md P2 item 30):
 // each state also gets a distinct fill/ring pattern, not just a hue, so a
@@ -52,6 +64,38 @@ function SectorTriad({ e }: { e: TimingEntry }) {
         )
       })}
     </div>
+  )
+}
+
+/** Statuses whose silence is expected (parked, excluded, done), so a stale badge would be noise. */
+const QUIET_STATUSES: ReadonlySet<DriverStatus> = new Set<DriverStatus>([
+  'STOPPED',
+  'DNS',
+  'DSQ',
+  'FINISHED'
+])
+
+/**
+ * One driver's own data has gone quiet while the feed is live (IMPROVEMENT_OPPORTUNITIES.md #12).
+ * Icon plus the age in seconds, so it reads without colour; muted, not alarming.
+ */
+function DriverStaleMarker({ stale }: { stale: StaleDriverFeed[] }) {
+  const detail = stale
+    .map((s) => `${DRIVER_FEED_LABEL[s.feed]} ${Math.floor(s.ageMs / 1000)}s old`)
+    .join(', ')
+  const oldest = Math.max(...stale.map((s) => s.ageMs))
+  const label = `Stale data: ${detail}`
+  return (
+    <span
+      data-testid="driver-stale"
+      role="img"
+      aria-label={label}
+      title={label}
+      className="tnum inline-flex items-center gap-0.5 rounded px-0.5 text-[9px] font-medium text-fg-muted ring-1 ring-inset ring-fg-subtle/40"
+    >
+      <Clock className="h-2.5 w-2.5" aria-hidden="true" />
+      {Math.floor(oldest / 1000)}s
+    </span>
   )
 }
 
@@ -147,6 +191,12 @@ export function TimingTower() {
           const fav = favoriteSet.has(e.driverNumber)
           const focused = focusDriver === e.driverNumber
           const dim = e.retired || e.status === 'RETIRED' || e.status === 'DNF'
+          // A parked, retired, finished or excluded car legitimately goes quiet; only a running one
+          // is worth flagging.
+          const stale =
+            dim || e.inPit || QUIET_STATUSES.has(e.status)
+              ? null
+              : staleDriverFeeds(snapshot.driverFreshness?.[e.driverNumber], snapshot.feedFreshness)
           return (
             <div
               key={e.driverNumber}
@@ -161,7 +211,8 @@ export function TimingTower() {
               <button
                 onClick={() => pickDriver(e.driverNumber)}
                 aria-label={`Focus ${d?.code ?? e.driverNumber}`}
-                className="flex min-w-0 flex-1 items-center gap-2 text-left"
+                aria-pressed={focused}
+                className={cn('flex min-w-0 flex-1 items-center gap-2 text-left', FOCUS_RING_INSET)}
               >
                 {/* Position */}
                 <span
@@ -200,6 +251,7 @@ export function TimingTower() {
                         {/^\d+s$/.test(e.penalty) ? `+${e.penalty}` : e.penalty}
                       </span>
                     )}
+                    {stale && <DriverStaleMarker stale={stale} />}
                     {e.underInvestigation && (
                       <TriangleAlert
                         className="h-3 w-3 text-warn"

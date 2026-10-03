@@ -11,15 +11,19 @@ export function GapChart() {
   const snapshot = useSessionStore((s) => s.snapshot)
   const [view, setView] = useState<'leader' | 'interval'>('leader')
 
+  // The option is a pure function of timing, drivers and the selected view.
+  const timing = snapshot?.timing
+  const drivers = snapshot?.drivers
+
   const rawOption = useMemo<EChartsCoreOption | null>(() => {
-    if (!snapshot || snapshot.timing.length === 0) return null
+    if (!timing || !drivers || timing.length === 0) return null
 
     const driverMap = new Map<number, { code: string; color: string }>()
-    snapshot.drivers.forEach((d) => {
+    drivers.forEach((d) => {
       driverMap.set(d.number, { code: d.code, color: hexColor(d.teamColour) })
     })
 
-    const validTiming = snapshot.timing
+    const validTiming = timing
       .filter((t) => t.position !== null)
       .sort((a, b) => (a.position ?? 99) - (b.position ?? 99))
 
@@ -92,7 +96,7 @@ export function GapChart() {
         }
       ]
     }
-  }, [snapshot, view])
+  }, [timing, drivers, view])
 
   const option = useLastGood(rawOption)
   // useLastGood only bridges `null` (its "missing" sentinel), not `false` —

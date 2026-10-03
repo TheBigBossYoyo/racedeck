@@ -15,6 +15,16 @@ import { WidgetFrame } from '@renderer/components/ui/WidgetFrame'
 import { Button } from '@renderer/components/ui/primitives'
 import { VideoModeIndicator } from '@renderer/components/shell/VideoModeIndicator'
 import { useVideoStore } from '@renderer/store/videoStore'
+import { useAppStore } from '@renderer/store/appStore'
+
+/**
+ * Position poll cadence. ResizeObserver reports every SIZE change at once, but it
+ * cannot see a panel that merely MOVES (a grid drag, a preset reflow, a sibling
+ * panel collapsing above it), so a poll remains as the safety net. It stays fast
+ * at all times: at 500 ms the native surface visibly trailed the panel after such
+ * a move, and the saving over 120 ms is a single cheap rect read.
+ */
+const BOUNDS_POLL_MS = 120
 
 export function TodVideoPanel() {
   const bodyRef = useRef<HTMLDivElement>(null)
@@ -22,6 +32,8 @@ export function TodVideoPanel() {
   const { applyBounds, setVisible, activate, setMode, reload, back, openExternal, toggleDevTools } =
     useVideoStore()
   const mode = state.mode
+  // Main only opens DevTools in dev builds, so the button would be a dead control elsewhere.
+  const isDevBuild = useAppStore((s) => s.info?.isDev === true)
 
   // Kick off a surface on first mount if none is active.
   useEffect(() => {
@@ -51,11 +63,10 @@ export function TodVideoPanel() {
       }
     }
     report()
-    // Poll as a fallback for layout changes (grid drag/resize), but track
-    // scroll + resize on the next frame so the native view stays glued to the
-    // panel instead of visibly lagging behind (which looks like it floats on
-    // top of other widgets while scrolling).
-    const id = window.setInterval(report, 120)
+    // Track scroll + resize on the next frame so the native view stays glued to
+    // the panel instead of visibly lagging behind (which looks like it floats on
+    // top of other widgets while scrolling). Size changes (grid resize, sidebar
+    // toggle) arrive through ResizeObserver; the poll covers pure movement.
     let raf = 0
     const onFrame = () => {
       if (raf) return
@@ -64,10 +75,19 @@ export function TodVideoPanel() {
         report()
       })
     }
+    const observer = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(onFrame) : null
+    if (observer && bodyRef.current) observer.observe(bodyRef.current)
+    let timer = 0
+    const poll = () => {
+      report()
+      timer = window.setTimeout(poll, BOUNDS_POLL_MS)
+    }
+    timer = window.setTimeout(poll, BOUNDS_POLL_MS)
     window.addEventListener('resize', onFrame)
     window.addEventListener('scroll', onFrame, true) // capture: catch inner scroll containers
     return () => {
-      window.clearInterval(id)
+      window.clearTimeout(timer)
+      observer?.disconnect()
       window.removeEventListener('resize', onFrame)
       window.removeEventListener('scroll', onFrame, true)
       if (raf) window.cancelAnimationFrame(raf)
@@ -95,7 +115,7 @@ export function TodVideoPanel() {
               </Button>
             </>
           )}
-          {canNavigate && (
+          {canNavigate && isDevBuild && (
             <Button
               size="icon-sm"
               variant="ghost"

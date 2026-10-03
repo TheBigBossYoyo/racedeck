@@ -18,6 +18,13 @@ const FLAG_COLOR: Partial<Record<FlagType, string>> = {
   WHITE: 'bg-white'
 }
 
+/** Non-colour form of severity for screen readers; `info` is the unmarked default. */
+const SEV_LABEL: Partial<Record<RaceControlMessage['severity'], string>> = {
+  critical: 'Critical',
+  warning: 'Warning',
+  notice: 'Notice'
+}
+
 const SEV_STYLE: Record<RaceControlMessage['severity'], string> = {
   critical: 'border-l-danger bg-danger/[0.06]',
   warning: 'border-l-warn bg-warn/[0.05]',
@@ -91,7 +98,10 @@ export function RaceControlFeed() {
               {iconFor(m)}
             </span>
             <div className="min-w-0 flex-1">
-              <p className="text-xs leading-snug text-fg">{m.message}</p>
+              <p className="text-xs leading-snug text-fg">
+                {SEV_LABEL[m.severity] && <span className="sr-only">{SEV_LABEL[m.severity]}: </span>}
+                {m.message}
+              </p>
               <div className="mt-0.5 flex items-center gap-2 text-[10px] text-fg-subtle">
                 {m.flag !== 'NONE' && FLAG_COLOR[m.flag] && (
                   <span className="flex items-center gap-1">

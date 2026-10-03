@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useShallow } from 'zustand/react/shallow'
 import {
   Trophy,
@@ -11,7 +11,14 @@ import {
   History
 } from 'lucide-react'
 import { WidgetFrame } from '@renderer/components/ui/WidgetFrame'
-import { Badge, Segmented, EmptyState, StatusDot } from '@renderer/components/ui/primitives'
+import {
+  Badge,
+  Segmented,
+  EmptyState,
+  StatusDot,
+  FOCUS_RING,
+  FOCUS_RING_INSET
+} from '@renderer/components/ui/primitives'
 import { useSessionStore } from '@renderer/store/sessionStore'
 import { useSettingsStore } from '@renderer/store/settingsStore'
 import { useAppStore } from '@renderer/store/appStore'
@@ -97,10 +104,14 @@ export function WinProbabilityPanel() {
     return () => window.clearInterval(id)
   }, [market.enabled, market.autoRefresh, query, slug, targetDateMs, refresh])
 
+  // Keyed on the drivers array, not the snapshot: `drivers` keeps its identity
+  // across publishes while the snapshot object is new on every one, and a fresh
+  // `matched` re-runs the history effect and the replay-price map at the data rate.
+  const drivers = snapshot?.drivers
   const matched = useMemo(() => {
-    if (!snapshot || !result?.ok) return null
-    return matchOutcomesToDrivers(result.outcomes, snapshot.drivers)
-  }, [snapshot, result])
+    if (!drivers || !result?.ok) return null
+    return matchOutcomesToDrivers(result.outcomes, drivers)
+  }, [drivers, result])
 
   const eventClosed = !!result?.event?.closed
 
@@ -115,12 +126,17 @@ export function WinProbabilityPanel() {
 
   // Closed markets retain replay data more reliably when Polymarket receives an
   // absolute time window around the session rather than interval=max.
+  // The moment moves with the playhead but only sizes the request window on a
+  // token's first load, so it is read through a ref instead of re-running this
+  // effect on every clock tick.
+  const momentUnixRef = useRef(momentUnix)
+  momentUnixRef.current = momentUnix
   useEffect(() => {
     if (!syncOdds || !matched) return
     for (const o of matched.byDriver.values()) {
-      if (o.yesTokenId) void loadHistory(o.yesTokenId, momentUnix ?? undefined)
+      if (o.yesTokenId) void loadHistory(o.yesTokenId, momentUnixRef.current ?? undefined)
     }
-  }, [syncOdds, matched, loadHistory, momentUnix])
+  }, [syncOdds, matched, loadHistory])
 
   const replayFairByDriver = useMemo(() => {
     if (!syncOdds || !matched || momentUnix == null) return new Map<number, number>()
@@ -177,9 +193,11 @@ export function WinProbabilityPanel() {
           {market.enabled && matched && (
             <button
               onClick={() => setSyncOdds((v) => !v)}
+              aria-pressed={syncOdds}
               title="Read market odds at the synced race moment (loads price history)"
               className={cn(
                 'no-drag inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-2xs font-medium transition-colors',
+                FOCUS_RING,
                 syncOdds
                   ? 'border-purple/40 bg-purple/15 text-purple'
                   : 'border-hairline/30 text-fg-subtle hover:text-fg'
@@ -238,8 +256,10 @@ export function WinProbabilityPanel() {
               <button
                 key={c.driverNumber}
                 onClick={() => pickDriver(c.driverNumber)}
+                aria-pressed={isFocus}
                 className={cn(
                   'group flex w-full items-center gap-2 rounded-lg border px-2 py-1.5 text-left transition-colors',
+                  FOCUS_RING_INSET,
                   isFocus
                     ? 'border-accent/40 bg-accent/5'
                     : 'border-transparent hover:border-hairline/30 hover:bg-white/[0.03]'

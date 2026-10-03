@@ -5,7 +5,14 @@ import { EmptyState, Badge, ProvenanceBadge } from '@renderer/components/ui/prim
 import { useSessionStore } from '@renderer/store/sessionStore'
 import { useSettingsStore } from '@renderer/store/settingsStore'
 import { cn } from '@renderer/lib/utils'
-import { formatTemp } from '@renderer/lib/units'
+import {
+  formatTemp,
+  formatWind,
+  formatWindValue,
+  formatPressureValue,
+  pressureUnitLabel,
+  windUnitLabel
+} from '@renderer/lib/units'
 import {
   weatherFieldTrend,
   rainTransition,
@@ -64,10 +71,11 @@ function Spark({ values, color }: { values: number[]; color: string }) {
   }, [values])
   return (
     <svg viewBox="0 0 100 28" preserveAspectRatio="none" className="h-7 w-full">
+      {/* `style`, not the stroke attribute: SVG presentation attributes cannot resolve `var()`. */}
       <path
         d={path}
         fill="none"
-        stroke={color}
+        style={{ stroke: color }}
         strokeWidth={1.5}
         vectorEffect="non-scaling-stroke"
       />
@@ -78,6 +86,8 @@ function Spark({ values, color }: { values: number[]; color: string }) {
 export function WeatherPanel() {
   const snapshot = useSessionStore((s) => s.snapshot)
   const tempUnit = useSettingsStore((s) => s.units.temperature)
+  const windUnit = useSettingsStore((s) => s.units.wind)
+  const pressureUnit = useSettingsStore((s) => s.units.pressure)
   const w = snapshot?.weather
   const history = snapshot?.weatherHistory ?? []
 
@@ -125,14 +135,14 @@ export function WeatherPanel() {
         <Stat
           icon={<Gauge className="h-4 w-4" />}
           label="Pressure"
-          value={w.pressure?.toFixed(0) ?? '—'}
-          unit="mb"
+          value={formatPressureValue(w.pressure, pressureUnit)}
+          unit={pressureUnitLabel(pressureUnit)}
         />
         <Stat
           icon={<Wind className="h-4 w-4" />}
           label="Wind"
-          value={w.windSpeed?.toFixed(1) ?? '—'}
-          unit="m/s"
+          value={formatWindValue(w.windSpeed, windUnit)}
+          unit={windUnitLabel(windUnit)}
         />
         <Stat
           icon={<Wind className="h-4 w-4" />}
@@ -149,7 +159,7 @@ export function WeatherPanel() {
               {formatTemp(trackTrend[trackTrend.length - 1], tempUnit)}
             </span>
           </div>
-          <Spark values={trackTrend} color="rgb(245 158 11)" />
+          <Spark values={trackTrend} color="rgb(var(--warn))" />
         </div>
       )}
       {airTrend.length > 1 && (
@@ -168,7 +178,7 @@ export function WeatherPanel() {
           <div className="mb-1 flex items-center justify-between text-[10px] uppercase tracking-wide text-fg-subtle">
             <span>Wind trend ({windDirection})</span>
             <span className="tnum text-fg-muted">
-              {windTrend[windTrend.length - 1].toFixed(1)} m/s
+              {formatWind(windTrend[windTrend.length - 1], windUnit)}
             </span>
           </div>
           <Spark values={windTrend} color="rgb(148 163 184)" />

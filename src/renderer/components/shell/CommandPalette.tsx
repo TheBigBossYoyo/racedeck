@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import { Command as CommandIcon, Search } from 'lucide-react'
 import { useSessionStore } from '@renderer/store/sessionStore'
 import { useLayoutStore } from '@renderer/store/layoutStore'
@@ -84,9 +84,11 @@ export function CommandPalette() {
   const [query, setQuery] = useState('')
   const [index, setIndex] = useState(0)
   const inputRef = useRef<HTMLInputElement>(null)
+  const dialogRef = useRef<HTMLDivElement>(null)
+  const listboxId = useId()
   const drivers = useSessionStore((s) => s.snapshot?.drivers) ?? NO_DRIVERS
 
-  // Ctrl/⌘+K toggles the palette (and Escape closes it).
+  // Ctrl/⌘+K toggles the palette (Escape is handled on the dialog itself).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && (e.key === 'k' || e.key === 'K')) {
@@ -99,11 +101,22 @@ export function CommandPalette() {
   }, [])
 
   useEffect(() => {
-    if (open) {
-      setQuery('')
-      setIndex(0)
-      // Focus the field after the dialog paints.
-      requestAnimationFrame(() => inputRef.current?.focus())
+    if (!open) return
+    setQuery('')
+    setIndex(0)
+    // Remember what had focus so closing hands it back (a modal that drops focus
+    // on <body> strands keyboard users at the top of the page).
+    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    inputRef.current?.focus()
+    // aria-modal only tells assistive tech the page is inert; keep real focus in too.
+    const onFocusIn = (e: FocusEvent) => {
+      const dialog = dialogRef.current
+      if (dialog && e.target instanceof Node && !dialog.contains(e.target)) inputRef.current?.focus()
+    }
+    document.addEventListener('focusin', onFocusIn)
+    return () => {
+      document.removeEventListener('focusin', onFocusIn)
+      if (opener?.isConnected) opener.focus()
     }
   }, [open])
 
@@ -295,6 +308,30 @@ export function CommandPalette() {
   if (!open) return null
 
   const runAt = (i: number) => results[i]?.run()
+  const optionId = (i: number) => `${listboxId}-opt-${i}`
+  const hasResults = results.length > 0
+
+  // Escape closes from anywhere inside; Tab is held inside the dialog. The input is
+  // the only tab stop (options are reached with arrow keys), so wrapping is a no-op
+  // move in practice but stays correct if a control is ever added.
+  const onDialogKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (e.key === 'Escape') {
+      e.preventDefault()
+      setOpen(false)
+      return
+    }
+    if (e.key !== 'Tab') return
+    const tabbables = Array.from(
+      e.currentTarget.querySelectorAll<HTMLElement>(
+        'a[href], button:not([disabled]), input:not([disabled]), select, textarea, [tabindex]:not([tabindex="-1"])'
+      )
+    )
+    e.preventDefault()
+    if (tabbables.length === 0) return
+    const at = tabbables.indexOf(document.activeElement as HTMLElement)
+    const next = e.shiftKey ? (at <= 0 ? tabbables.length - 1 : at - 1) : (at + 1) % tabbables.length
+    tabbables[next].focus()
+  }
 
   return (
     <div
@@ -302,11 +339,13 @@ export function CommandPalette() {
       onClick={() => setOpen(false)}
     >
       <div
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-label="Command palette"
         className="mx-4 w-full max-w-xl overflow-hidden rounded-2xl border border-hairline/30 bg-bg-overlay shadow-glass"
         onClick={(e) => e.stopPropagation()}
+        onKeyDown={onDialogKeyDown}
       >
         <div className="flex items-center gap-2 border-b border-hairline/20 px-3.5 py-3">
           <Search className="h-4 w-4 shrink-0 text-fg-subtle" />
@@ -318,13 +357,12 @@ export function CommandPalette() {
               setIndex(0)
             }}
             onKeyDown={(e) => {
-              if (e.key === 'Escape') setOpen(false)
-              else if (e.key === 'ArrowDown') {
+              if (e.key === 'ArrowDown') {
                 e.preventDefault()
-                setIndex((i) => Math.min(i + 1, results.length - 1))
+                setIndex(Math.min(clampedIndex + 1, Math.max(0, results.length - 1)))
               } else if (e.key === 'ArrowUp') {
                 e.preventDefault()
-                setIndex((i) => Math.max(i - 1, 0))
+                setIndex(Math.max(clampedIndex - 1, 0))
               } else if (e.key === 'Enter') {
                 e.preventDefault()
                 runAt(clampedIndex)
@@ -332,38 +370,83 @@ export function CommandPalette() {
             }}
             placeholder="Search commands, drivers, widgets…"
             className="min-w-0 flex-1 bg-transparent text-sm text-fg placeholder:text-fg-subtle focus:outline-none"
+            role="combobox"
             aria-label="Search commands"
+            aria-autocomplete="list"
+            aria-expanded={hasResults}
+            aria-controls={hasResults ? listboxId : undefined}
+            aria-activedescendant={hasResults ? optionId(clampedIndex) : undefined}
           />
           <kbd className="rounded border border-hairline/30 px-1.5 py-0.5 text-2xs text-fg-subtle">
             Esc
           </kbd>
         </div>
 
-        <ul className="max-h-[52vh] overflow-y-auto py-1.5" role="listbox">
-          {results.length === 0 ? (
-            <li className="px-3.5 py-6 text-center text-xs text-fg-subtle">No matching command.</li>
-          ) : (
-            results.map((command, i) => (
-              <li key={command.id} role="option" aria-selected={i === clampedIndex}>
-                <button
-                  onMouseMove={() => setIndex(i)}
-                  onClick={() => runAt(i)}
-                  className={cn(
-                    'flex w-full items-center gap-2 px-3.5 py-2 text-left text-sm transition-colors',
-                    i === clampedIndex
-                      ? 'bg-accent/15 text-fg'
-                      : 'text-fg-muted hover:bg-white/[0.03]'
-                  )}
-                >
-                  <CommandIcon className="h-3.5 w-3.5 shrink-0 text-fg-subtle" />
-                  <span className="min-w-0 flex-1 truncate">{command.label}</span>
-                  <span className="shrink-0 text-2xs text-fg-subtle">{command.group}</span>
-                </button>
-              </li>
-            ))
-          )}
-        </ul>
+        {hasResults ? (
+          <ul
+            id={listboxId}
+            className="max-h-[52vh] overflow-y-auto py-1.5"
+            role="listbox"
+            aria-label="Commands"
+          >
+            {results.map((command, i) => (
+              <PaletteOption
+                key={command.id}
+                id={optionId(i)}
+                command={command}
+                active={i === clampedIndex}
+                onHover={() => setIndex(i)}
+                onRun={() => runAt(i)}
+              />
+            ))}
+          </ul>
+        ) : (
+          <p role="status" className="px-3.5 py-6 text-center text-xs text-fg-subtle">
+            No matching command.
+          </p>
+        )}
       </div>
     </div>
+  )
+}
+
+function PaletteOption({
+  id,
+  command,
+  active,
+  onHover,
+  onRun
+}: {
+  id: string
+  command: Command
+  active: boolean
+  onHover: () => void
+  onRun: () => void
+}) {
+  const ref = useRef<HTMLLIElement>(null)
+  // The active option is never focused (aria-activedescendant), so keyboard
+  // navigation has to scroll it into view itself.
+  useEffect(() => {
+    if (active) ref.current?.scrollIntoView?.({ block: 'nearest' })
+  }, [active])
+  return (
+    <li
+      ref={ref}
+      id={id}
+      role="option"
+      aria-selected={active}
+      // Keep focus on the input: a click on an option must not blur the combobox.
+      onMouseDown={(e) => e.preventDefault()}
+      onMouseMove={onHover}
+      onClick={onRun}
+      className={cn(
+        'flex w-full cursor-pointer items-center gap-2 px-3.5 py-2 text-left text-sm transition-colors',
+        active ? 'bg-accent/15 text-fg' : 'text-fg-muted hover:bg-white/[0.03]'
+      )}
+    >
+      <CommandIcon className="h-3.5 w-3.5 shrink-0 text-fg-subtle" aria-hidden="true" />
+      <span className="min-w-0 flex-1 truncate">{command.label}</span>
+      <span className="shrink-0 text-2xs text-fg-subtle">{command.group}</span>
+    </li>
   )
 }

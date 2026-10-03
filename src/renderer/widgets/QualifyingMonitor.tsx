@@ -1,7 +1,7 @@
 import { useMemo } from 'react'
 import { Clock3, Gauge, TimerReset } from 'lucide-react'
 import { WidgetFrame } from '@renderer/components/ui/WidgetFrame'
-import { Badge, EmptyState } from '@renderer/components/ui/primitives'
+import { Badge, EmptyState, FOCUS_RING_INSET } from '@renderer/components/ui/primitives'
 import { useSessionStore } from '@renderer/store/sessionStore'
 import { qualifyingPhaseClockAt } from '@renderer/core/engines/SessionPhaseEngine'
 import {
@@ -14,10 +14,18 @@ import { cn, formatDuration, formatLapTime, hexColor } from '@renderer/lib/utils
 import { pickDriver } from '@renderer/lib/useFocusDriver'
 import type { SectorState } from '@shared/models'
 
+// The session-best ring matches TimingTower's sector boxes, so a purple/green
+// pair is distinguishable by pattern and not only by hue.
 const SECTOR_TONE: Record<SectorState, string> = {
   none: 'bg-fg-subtle/20',
   'personal-best': 'bg-good',
-  'session-best': 'bg-purple'
+  'session-best': 'bg-purple ring-2 ring-inset ring-white/70'
+}
+
+const SECTOR_LABEL: Record<SectorState, string> = {
+  none: 'no time yet',
+  'personal-best': 'personal best',
+  'session-best': 'session best'
 }
 
 const STATE_TONE: Record<QualifyingRunState, string> = {
@@ -190,8 +198,10 @@ export function QualifyingMonitor() {
             <button
               key={row.driverNumber}
               onClick={() => pickDriver(row.driverNumber)}
+              aria-pressed={focused}
               className={cn(
                 'relative grid w-full grid-cols-[28px_62px_78px_64px_54px_1fr] items-center gap-1 border-b border-hairline/15 px-2 py-1.5 text-left transition-colors hover:bg-white/[0.03]',
+                FOCUS_RING_INSET,
                 focused && 'bg-accent/10',
                 row.atRisk && 'bg-danger/[0.045]',
                 board.cutoffPosition != null && row.position === board.cutoffPosition + 1 && 'border-t-2 border-t-danger/60'
@@ -200,6 +210,7 @@ export function QualifyingMonitor() {
               {row.fastest && <span className="absolute inset-y-0 left-0 w-0.5 bg-purple" />}
               <span className={cn('tnum text-center text-xs font-bold', row.bubble ? 'text-warn' : 'text-fg-muted')}>
                 {row.position}
+                {row.bubble && <span className="sr-only"> on the cut-off bubble</span>}
               </span>
               <span className="flex min-w-0 items-center gap-1.5">
                 <span className="h-4 w-[3px] shrink-0 rounded-full" style={{ backgroundColor: hexColor(driver?.teamColour) }} />
@@ -228,7 +239,13 @@ export function QualifyingMonitor() {
                 )}
                 <span className="flex gap-0.5">
                   {row.sectors.map((sector, index) => (
-                    <span key={index} className={cn('h-1.5 w-3 rounded-sm', SECTOR_TONE[sector])} />
+                    <span
+                      key={index}
+                      role="img"
+                      aria-label={`Sector ${index + 1}: ${SECTOR_LABEL[sector]}`}
+                      title={`Sector ${index + 1}: ${SECTOR_LABEL[sector]}`}
+                      className={cn('h-1.5 w-3 rounded-sm', SECTOR_TONE[sector])}
+                    />
                   ))}
                 </span>
                 <span

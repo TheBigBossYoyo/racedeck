@@ -1,8 +1,9 @@
 import { useRef } from 'react'
+import { useShallow } from 'zustand/react/shallow'
 import { Play, Pause, SkipBack, SkipForward, Circle, Flag } from 'lucide-react'
 import { useSessionStore } from '@renderer/store/sessionStore'
 import { useSyncStore } from '@renderer/store/syncStore'
-import { Button, Segmented } from '@renderer/components/ui/primitives'
+import { Button, Segmented, FOCUS_RING_INSET } from '@renderer/components/ui/primitives'
 import { Slider } from '@renderer/components/ui/controls'
 import { formatDuration } from '@renderer/lib/utils'
 import { cn } from '@renderer/lib/utils'
@@ -19,7 +20,21 @@ const SPEEDS = [
 ]
 
 export function TransportBar({ showScrubber = true }: { showScrubber?: boolean }) {
-  const { playing, togglePlay, clock, duration, seek, step, speed, setSpeed } = useSessionStore()
+  // Field-level subscription: the bare `useSessionStore()` also re-rendered the
+  // bar on every snapshot swap. `clock` is subscribed only for its re-render:
+  // the scrubber position is derived from it through `effectiveDataTime()`.
+  const { playing, togglePlay, clock, duration, seek, step, speed, setSpeed } = useSessionStore(
+    useShallow((s) => ({
+      playing: s.playing,
+      togglePlay: s.togglePlay,
+      clock: s.clock,
+      duration: s.duration,
+      seek: s.seek,
+      step: s.step,
+      speed: s.speed,
+      setSpeed: s.setSpeed
+    }))
+  )
   const timeline = useSessionStore((s) => s.timeline)
   const bookmarks = useSessionStore((s) => s.bookmarks)
   const currentLap = useSessionStore((s) => s.snapshot?.currentLap ?? null)
@@ -66,6 +81,7 @@ export function TransportBar({ showScrubber = true }: { showScrubber?: boolean }
               step={0.5}
               value={[dataT]}
               onValueChange={([v]) => seekDataTime(v)}
+              aria-label="Playback position"
             />
             {timeline && duration > 0 && (
               <PhaseStrip
@@ -196,7 +212,7 @@ function PhaseStrip({
     onSeek(Math.max(0, Math.min(duration, f * duration)))
   }
 
-  const segTitle = (seg: (typeof timeline.segments)[number]) => {
+  const segLabel = (seg: (typeof timeline.segments)[number]) => {
     const meta = phaseMeta(seg.kind)
     const laps =
       seg.lapStart != null && seg.lapEnd != null && seg.lapStart !== seg.lapEnd
@@ -204,12 +220,14 @@ function PhaseStrip({
         : seg.lapStart != null
           ? ` · lap ${seg.lapStart}`
           : ''
-    return `${meta.label}${laps} — click to jump`
+    return `${meta.label}${laps}`
   }
 
   return (
     <div
       ref={ref}
+      role="group"
+      aria-label="Race phases"
       onClick={handleClick}
       className="no-drag relative h-2 w-full cursor-pointer overflow-hidden rounded-full bg-black/10 ring-1 ring-hairline/25"
       title="Race phases — click to jump"
@@ -218,16 +236,27 @@ function PhaseStrip({
         const meta = phaseMeta(seg.kind)
         const dim = seg.kind === 'pre' || seg.kind === 'post'
         return (
+          // A div, not a <button>: a native button's Enter/Space click would bubble to the
+          // strip's pointer-position handler with clientX 0 and seek to the very start.
           <div
             key={i}
-            className="absolute top-0 h-full"
+            role="button"
+            tabIndex={0}
+            aria-label={`Jump to ${segLabel(seg)} at ${formatDuration(seg.tStart)}`}
+            onKeyDown={(e) => {
+              if (e.key !== 'Enter' && e.key !== ' ') return
+              e.preventDefault()
+              e.stopPropagation()
+              onSeek(seg.tStart)
+            }}
+            className={cn('absolute top-0 h-full focus-visible:z-20', FOCUS_RING_INSET)}
             style={{
               left: pct(seg.tStart),
               width: pct(seg.tEnd - seg.tStart),
               backgroundColor: meta.color,
               opacity: dim ? 0.55 : 1
             }}
-            title={segTitle(seg)}
+            title={`${segLabel(seg)} — click to jump`}
           />
         )
       })}
@@ -258,6 +287,7 @@ function PhaseStrip({
               meta.ring && 'ring-2 ring-white/60'
             )}
             style={{ left: pct(bookmark.t), backgroundColor: meta.color }}
+            aria-label={`Jump to ${bookmark.label} at ${formatDuration(bookmark.t)}`}
             title={`${bookmark.label} — click to jump`}
           />
         )

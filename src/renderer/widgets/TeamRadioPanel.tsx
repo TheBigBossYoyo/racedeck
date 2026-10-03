@@ -1,7 +1,7 @@
 import { useMemo } from 'react'
 import { Radio, Play, Pause, FileText, Loader2 } from 'lucide-react'
 import { WidgetFrame } from '@renderer/components/ui/WidgetFrame'
-import { EmptyState } from '@renderer/components/ui/primitives'
+import { EmptyState, FOCUS_RING } from '@renderer/components/ui/primitives'
 import { useSessionStore } from '@renderer/store/sessionStore'
 import { useSettingsStore } from '@renderer/store/settingsStore'
 import { useRadioPlaybackStore } from '@renderer/store/radioPlaybackStore'
@@ -9,6 +9,7 @@ import { useRadioTranscriptStore } from '@renderer/store/radioTranscriptStore'
 import { seekToRadioClip } from '@renderer/lib/seekToRadioClip'
 import { isTranscriptionReady } from '@shared/ai'
 import { hexColor } from '@renderer/lib/utils'
+import { formatClockShort } from '@renderer/lib/units'
 import { cn } from '@renderer/lib/utils'
 
 /** Inline "Transcribe" action + result, shown only when the user's AI config supports it. */
@@ -61,18 +62,12 @@ export function TranscribeAction({ url }: { readonly url: string }) {
  * (APP_IMPROVEMENT_ROADMAP.md P2 item 23).
  */
 
-/** Clock time of a capture in the session's local presentation (HH:MM). */
-function clockOf(utc: string): string {
-  const ms = Date.parse(utc)
-  if (!Number.isFinite(ms)) return '--:--'
-  return new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-}
-
 export function TeamRadioPanel() {
   const snapshot = useSessionStore((s) => s.snapshot)
   const favorites = useSettingsStore((s) => s.favorites)
   const playingUrl = useRadioPlaybackStore((s) => s.playingUrl)
   const togglePlayback = useRadioPlaybackStore((s) => s.toggle)
+  const clockUnit = useSettingsStore((s) => s.units.clock)
 
   const clips = snapshot?.teamRadio ?? []
 
@@ -121,7 +116,9 @@ export function TeamRadioPanel() {
                 <button
                   type="button"
                   onClick={() => play(clip.url, clip.utc)}
-                  className="flex w-full items-center gap-2 text-left"
+                  aria-label={`${isPlaying ? 'Pause' : 'Play'} radio clip from ${driver?.code ?? `#${clip.driverNumber}`} at ${formatClockShort(clip.utc, clockUnit)}`}
+                  aria-pressed={isPlaying}
+                  className={cn('flex w-full items-center gap-2 rounded text-left', FOCUS_RING)}
                 >
                   <span
                     className="h-6 w-1 shrink-0 rounded-full"
@@ -136,7 +133,7 @@ export function TeamRadioPanel() {
                     {driver?.code ?? `#${clip.driverNumber}`}
                   </span>
                   <span className="ml-auto text-[10px] tabular-nums text-fg-subtle">
-                    {clockOf(clip.utc)}
+                    {formatClockShort(clip.utc, clockUnit)}
                   </span>
                 </button>
                 {transcriptionOk && <TranscribeAction url={clip.url} />}

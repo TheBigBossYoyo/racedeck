@@ -2,16 +2,21 @@ import { useEffect } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { Bell, BellOff, Trash2, X, TriangleAlert, Flag, CloudRain, Timer } from 'lucide-react'
 import { WidgetFrame } from '@renderer/components/ui/WidgetFrame'
-import { Button, EmptyState } from '@renderer/components/ui/primitives'
+import { Button, EmptyState, FOCUS_RING } from '@renderer/components/ui/primitives'
 import { useAlertStore } from '@renderer/store/alertStore'
 import type { AlertEvent, AlertType } from '@renderer/core/engines/AlertEngine'
 import { cn } from '@renderer/lib/utils'
 
-const SEV: Record<AlertEvent['severity'], { border: string; text: string; dot: string }> = {
-  critical: { border: 'border-l-danger', text: 'text-danger', dot: 'bg-danger' },
-  warning: { border: 'border-l-warn', text: 'text-warn', dot: 'bg-warn' },
-  notice: { border: 'border-l-good', text: 'text-good', dot: 'bg-good' },
-  info: { border: 'border-l-accent/50', text: 'text-accent', dot: 'bg-accent' }
+// `label` is the non-colour form of severity (read by screen readers); the icon
+// only says what kind of alert it is, not how serious.
+const SEV: Record<
+  AlertEvent['severity'],
+  { border: string; text: string; dot: string; label: string }
+> = {
+  critical: { border: 'border-l-danger', text: 'text-danger', dot: 'bg-danger', label: 'Critical' },
+  warning: { border: 'border-l-warn', text: 'text-warn', dot: 'bg-warn', label: 'Warning' },
+  notice: { border: 'border-l-good', text: 'text-good', dot: 'bg-good', label: 'Notice' },
+  info: { border: 'border-l-accent/50', text: 'text-accent', dot: 'bg-accent', label: 'Info' }
 }
 
 function iconFor(type: AlertType) {
@@ -50,10 +55,12 @@ export function AlertCenter() {
             variant={muted ? 'default' : 'ghost'}
             onClick={() => setMuted(!muted)}
             title={muted ? 'Unmute alerts' : 'Mute alerts'}
+            aria-label={muted ? 'Unmute alerts' : 'Mute alerts'}
+            aria-pressed={muted}
           >
             {muted ? <BellOff className="h-3.5 w-3.5" /> : <Bell className="h-3.5 w-3.5" />}
           </Button>
-          <Button size="icon-sm" variant="ghost" onClick={clear} title="Clear all">
+          <Button size="icon-sm" variant="ghost" onClick={clear} title="Clear all" aria-label="Clear all alerts">
             <Trash2 className="h-3.5 w-3.5" />
           </Button>
         </>
@@ -82,17 +89,26 @@ export function AlertCenter() {
                     s.border
                   )}
                 >
-                  <span className={cn('mt-0.5 shrink-0', s.text)}>{iconFor(a.type)}</span>
+                  <span className={cn('mt-0.5 shrink-0', s.text)} aria-hidden="true">
+                    {iconFor(a.type)}
+                  </span>
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
-                      <span className={cn('text-xs font-semibold', s.text)}>{a.title}</span>
+                      <span className={cn('text-xs font-semibold', s.text)}>
+                        <span className="sr-only">{s.label}: </span>
+                        {a.title}
+                      </span>
                       <span className="tnum ml-auto text-[10px] text-fg-subtle">{ago(a.seenAt)}</span>
                     </div>
                     <p className="mt-0.5 text-[11px] leading-snug text-fg-muted">{a.detail}</p>
                   </div>
                   <button
                     onClick={() => dismiss(a.id)}
-                    className="shrink-0 rounded p-0.5 text-fg-subtle opacity-0 transition-opacity hover:bg-white/5 hover:text-fg group-hover:opacity-100"
+                    aria-label={`Dismiss alert: ${a.title}`}
+                    className={cn(
+                      'shrink-0 rounded p-0.5 text-fg-subtle opacity-0 transition-opacity hover:bg-white/5 hover:text-fg group-hover:opacity-100 focus-visible:opacity-100',
+                      FOCUS_RING
+                    )}
                   >
                     <X className="h-3 w-3" />
                   </button>

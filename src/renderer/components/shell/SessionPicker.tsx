@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useShallow } from 'zustand/react/shallow'
 import { ChevronDown, Loader2, MapPin, Calendar, ShieldAlert, Beaker } from 'lucide-react'
 import { useSessionStore } from '@renderer/store/sessionStore'
 import { Dialog, DialogTrigger, DialogContent, DialogClose } from '@renderer/components/ui/Dialog'
@@ -16,7 +17,19 @@ export function SessionPicker() {
     setProvider,
     selectSession,
     refreshSessions
-  } = useSessionStore()
+  } = useSessionStore(
+    useShallow((s) => ({
+      providerId: s.providerId,
+      catalog: s.catalog,
+      sessions: s.sessions,
+      sessionsLoading: s.sessionsLoading,
+      loadingSession: s.loadingSession,
+      currentSession: s.currentSession,
+      setProvider: s.setProvider,
+      selectSession: s.selectSession,
+      refreshSessions: s.refreshSessions
+    }))
+  )
   const [open, setOpen] = useState(false)
 
   const providerOptions = catalog.map((c) => ({ value: c.id, label: c.label.split(' ')[0] }))

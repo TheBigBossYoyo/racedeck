@@ -1,7 +1,7 @@
 import { useMemo } from 'react'
 import { Gauge, ArrowRight, TrendingDown, TrendingUp, Minus, CornerDownRight, Flag } from 'lucide-react'
 import { WidgetFrame } from '@renderer/components/ui/WidgetFrame'
-import { EmptyState, Badge } from '@renderer/components/ui/primitives'
+import { EmptyState, Badge, FOCUS_RING_INSET } from '@renderer/components/ui/primitives'
 import { useSessionStore } from '@renderer/store/sessionStore'
 import { useFocusDriver, pickDriver } from '@renderer/lib/useFocusDriver'
 import {
@@ -48,10 +48,8 @@ export function PitStopPredictor() {
     [snapshot]
   )
 
-  const driverMeta = useMemo(
-    () => new Map((snapshot?.drivers ?? []).map((d) => [d.number, d])),
-    [snapshot]
-  )
+  const drivers = snapshot?.drivers
+  const driverMeta = useMemo(() => new Map((drivers ?? []).map((d) => [d.number, d])), [drivers])
 
   if (!snapshot) {
     return (
@@ -85,6 +83,7 @@ export function PitStopPredictor() {
               aria-pressed={active}
               className={cn(
                 'relative z-10 flex shrink-0 items-center gap-1 rounded-md border px-1.5 py-1 text-[11px] font-bold transition-colors',
+                FOCUS_RING_INSET,
                 active
                   ? 'border-accent/50 bg-accent/15 text-fg'
                   : 'border-hairline/25 text-fg-muted hover:bg-white/5'
